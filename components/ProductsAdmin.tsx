@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { Category, Product } from "@/lib/types";
 import { formatKc, halToKcInput, kcToHal } from "@/lib/money";
+import EmojiPicker from "@/components/EmojiPicker";
 
 interface Props {
   initialCategories: Category[];
@@ -183,13 +184,7 @@ function ProductForm({
         placeholder="Cena Kč"
         className="rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-emerald-500"
       />
-      <input
-        value={emoji}
-        onChange={(e) => setEmoji(e.target.value)}
-        placeholder="🙂"
-        maxLength={2}
-        className="w-16 rounded-lg border border-slate-300 px-3 py-2 text-center outline-none focus:border-emerald-500"
-      />
+      <EmojiPicker value={emoji} onChange={setEmoji} />
       <select
         value={categoryId}
         onChange={(e) => setCategoryId(e.target.value)}
@@ -231,7 +226,7 @@ function ProductRow({
       <div className="grid gap-2 py-3 sm:grid-cols-[2fr_1fr_auto_1fr_auto]">
         <input value={name} onChange={(e) => setName(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2" />
         <input value={price} onChange={(e) => setPrice(e.target.value)} inputMode="decimal" className="rounded-lg border border-slate-300 px-3 py-2" />
-        <input value={emoji} onChange={(e) => setEmoji(e.target.value)} maxLength={2} className="w-16 rounded-lg border border-slate-300 px-3 py-2 text-center" />
+        <EmojiPicker value={emoji} onChange={setEmoji} />
         <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2">
           <option value="">Bez kategorie</option>
           {categories.map((c) => (
