@@ -65,24 +65,28 @@ změnit proměnnou `DATA_DIR`.
 > (nikdy nemaže). CLI `npm run seed` naopak data **přepíše** – používejte ho jen
 > lokálně.
 
-## Platba kartou a DISH
+## Platba kartou (Adyen Terminal API)
 
-Platba kartou je schválně **abstrahovaná** (`lib/payments.ts`), aby appka nebyla
-svázaná s konkrétním terminálem:
+Platba kartou je **abstrahovaná** (`lib/payments.ts`) se dvěma režimy:
 
 - **Ruční potvrzení (výchozí, funguje hned)** – brigádník naťuká částku do
-  stávajícího terminálu **DISH PAY NOW**, zákazník zaplatí a v appce se prodej
-  potvrdí. Nevyžaduje žádnou integraci.
-- **Automatické odeslání do DISH (připravený slot)** – DISH Digital Solutions
-  **nemá veřejné API** pro odeslání částky do terminálu; vyžadovalo by to
-  partnerský/certifikovaný přístup. Kód i UI jsou připravené: jakmile budou
-  k dispozici přístupové údaje, vyplní se v `.env` (`DISH_API_BASE`,
-  `DISH_API_KEY`, `DISH_TERMINAL_ID`) a doplní se volání ve funkci
-  `chargeViaDish` v `lib/payments.ts`. Aplikace se pak automaticky přepne z
-  ručního potvrzení na odeslání do terminálu.
+  terminálu (i stávajícího **DISH PAY NOW**), zákazník zaplatí a v appce se
+  prodej potvrdí. Bez integrace.
+- **Automatické odeslání do terminálu přes Adyen** (`lib/adyen.ts`) – server
+  pošle částku na Adyen Terminal API (cloud), terminál platbu provede a vrátí
+  výsledek. Aktivuje se nastavením `ADYEN_*` proměnných v `.env`; appka se pak
+  sama přepne z ručního potvrzení na odeslání do terminálu.
 
-Přidání jiného poskytovatele s veřejným API (SumUp / Square / Adyen / Tap to Pay)
-= přidání další větve ve stejné abstrakci; zbytek aplikace se nemění.
+**DISH Pay běží na Adyenu**, takže pokud od DISH získáte API key, merchant
+account a POIID k jejich terminálu, funguje tohle napojení rovnou na stávajícím
+DISH PAY NOW – bez nového hardwaru. Jinak platí pro vlastní Adyen účet + Adyen
+terminál.
+
+**Testování bez terminálu:** nastavte `ADYEN_SIMULATE=1` – platba se „schválí"
+bez volání Adyenu, takže lze vyzkoušet celý průběh v pokladně.
+
+Přidání dalšího poskytovatele (SumUp / Viva / …) = přidání další větve ve stejné
+abstrakci; zbytek aplikace se nemění.
 
 ## Struktura
 
@@ -96,7 +100,8 @@ lib/
   types.ts           doménové typy (částky v haléřích)
   store.ts           souborové úložiště (repository rozhraní)
   orders.ts          sestavení a zaevidování objednávky
-  payments.ts        abstrakce platby kartou (+ DISH slot)
+  payments.ts        abstrakce platby kartou
+  adyen.ts           Adyen Terminal API klient
   money.ts           formátování/parsování Kč
 scripts/seed.ts      ukázková data
 public/              manifest, service worker, ikona (PWA)

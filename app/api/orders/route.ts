@@ -4,6 +4,8 @@ import { placeOrder, OrderError } from "@/lib/orders";
 import type { CreateOrderInput } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+// Platba kartou na terminálu (Adyen) může běžet déle – necháme routě víc času.
+export const maxDuration = 120;
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);

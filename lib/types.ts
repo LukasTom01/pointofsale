@@ -23,7 +23,9 @@ export interface Product {
 
 export type PaymentMethod = "cash" | "card";
 export type PaymentStatus = "paid" | "failed" | "canceled";
-export type CardProvider = "manual" | "dish";
+// "manual" = ruční potvrzení na terminálu; "adyen" = automatické odeslání
+// do terminálu přes Adyen Terminal API.
+export type CardProvider = "manual" | "adyen";
 
 export interface OrderItem {
   productId?: string | null;

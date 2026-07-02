@@ -104,8 +104,8 @@ export default function Checkout({ cart, totalHal, cardProvider, onClose, onPaid
                 <span>
                   <span className="block text-lg font-bold text-slate-900">Karta</span>
                   <span className="text-sm text-slate-500">
-                    {cardProvider === "dish"
-                      ? "Odeslání do terminálu DISH"
+                    {cardProvider === "adyen"
+                      ? "Odeslání do terminálu"
                       : "Potvrzení platby na terminálu"}
                   </span>
                 </span>
@@ -207,20 +207,21 @@ function CardStep({
   busy: boolean;
   onConfirm: () => void;
 }) {
-  if (provider === "dish") {
+  if (provider === "adyen") {
     return (
       <div className="text-center">
         <p className="mb-4 text-slate-600">
-          Částka <strong>{formatKc(totalHal)}</strong> se odešle do terminálu DISH. Vyčkejte na dokončení platby na
-          terminálu.
+          Částka <strong>{formatKc(totalHal)}</strong> se odešle do terminálu. Nechte zákazníka zaplatit kartou na
+          terminálu a vyčkejte na dokončení.
         </p>
         <button
           disabled={busy}
           onClick={onConfirm}
           className="tap-active w-full rounded-2xl bg-emerald-600 py-4 text-lg font-bold text-white disabled:bg-slate-300"
         >
-          {busy ? "Odesílám do terminálu…" : "Odeslat do terminálu"}
+          {busy ? "Čekám na terminál…" : "Odeslat do terminálu"}
         </button>
+        <p className="mt-3 text-xs text-slate-400">Platba se dokončí na terminálu.</p>
       </div>
     );
   }

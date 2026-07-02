@@ -3,7 +3,7 @@
 
 import type { CreateOrderInput, Order, OrderItem } from "./types";
 import { createOrder, getProduct } from "./store";
-import { activeCardProvider, chargeViaDish } from "./payments";
+import { activeCardProvider, chargeViaAdyen } from "./payments";
 
 export class OrderError extends Error {}
 
@@ -52,9 +52,10 @@ export async function placeOrder(input: CreateOrderInput): Promise<Order> {
   } else {
     // Karta.
     cardProvider = input.cardProvider ?? activeCardProvider();
-    if (cardProvider === "dish") {
-      // Automatické odeslání do terminálu (aktivní až po nakonfigurování DISH).
-      const result = await chargeViaDish({ amountHal: totalHal });
+    if (cardProvider === "adyen") {
+      // Automatické odeslání do terminálu přes Adyen Terminal API.
+      const reference = `pos-${Date.now().toString(36)}`;
+      const result = await chargeViaAdyen({ amountHal: totalHal, reference });
       paymentStatus = result.status === "approved" ? "paid" : "failed";
       cardRef = result.transactionRef ?? cardRef;
       if (paymentStatus !== "paid") {
