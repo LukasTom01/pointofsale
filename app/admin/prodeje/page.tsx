@@ -1,54 +1,105 @@
 import { listOrders } from "@/lib/store";
 import { formatKc } from "@/lib/money";
+import { resolveRange } from "@/lib/dateRange";
+import { productSummary, totals } from "@/lib/reports";
 import type { Order } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-function todayStr(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
 export default async function ProdejePage({
   searchParams,
 }: {
-  searchParams: Promise<{ day?: string }>;
+  searchParams: Promise<{ from?: string; to?: string; day?: string }>;
 }) {
-  const { day: dayParam } = await searchParams;
-  const day = dayParam && /^\d{4}-\d{2}-\d{2}$/.test(dayParam) ? dayParam : todayStr();
-  const from = new Date(`${day}T00:00:00`);
-  const to = new Date(from.getTime() + 24 * 60 * 60 * 1000);
+  const sp = await searchParams;
+  // Zpětná kompatibilita: starý odkaz s ?day= funguje dál.
+  const { fromStr, toStr, from, to } = resolveRange(sp.from ?? sp.day, sp.to ?? sp.day);
   const orders = await listOrders({ from, to });
 
-  const paid = orders.filter((o) => o.paymentStatus === "paid");
-  const total = paid.reduce((s, o) => s + o.totalHal, 0);
-  const cashTotal = paid.filter((o) => o.paymentMethod === "cash").reduce((s, o) => s + o.totalHal, 0);
-  const cardTotal = paid.filter((o) => o.paymentMethod === "card").reduce((s, o) => s + o.totalHal, 0);
+  const t = totals(orders);
+  const products = productSummary(orders);
+  const exportQs = `from=${fromStr}&to=${toStr}`;
 
   return (
     <div className="grid gap-4">
-      <form method="get" className="flex items-center gap-2">
-        <label className="text-sm font-medium text-slate-600">Den:</label>
-        <input
-          type="date"
-          name="day"
-          defaultValue={day}
-          className="rounded-lg border border-slate-300 px-3 py-2"
-        />
+      <form method="get" className="flex flex-wrap items-end gap-2">
+        <label className="flex flex-col text-sm font-medium text-slate-600">
+          Od
+          <input type="date" name="from" defaultValue={fromStr} className="rounded-lg border border-slate-300 px-3 py-2" />
+        </label>
+        <label className="flex flex-col text-sm font-medium text-slate-600">
+          Do
+          <input type="date" name="to" defaultValue={toStr} className="rounded-lg border border-slate-300 px-3 py-2" />
+        </label>
         <button className="rounded-lg bg-slate-900 px-4 py-2 font-semibold text-white">Zobrazit</button>
+        <div className="ml-auto flex gap-2">
+          <a
+            href={`/api/export?type=orders&${exportQs}`}
+            className="rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-700"
+          >
+            ⬇ Účtenky (CSV)
+          </a>
+          <a
+            href={`/api/export?type=products&${exportQs}`}
+            className="rounded-lg bg-emerald-600 px-4 py-2 font-semibold text-white hover:bg-emerald-700"
+          >
+            ⬇ Produkty (CSV)
+          </a>
+        </div>
       </form>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Stat label="Tržba celkem" value={formatKc(total)} big />
-        <Stat label="Prodejů" value={String(paid.length)} />
-        <Stat label="Hotovost" value={formatKc(cashTotal)} />
-        <Stat label="Karta" value={formatKc(cardTotal)} />
+        <Stat label="Tržba celkem" value={formatKc(t.totalHal)} big />
+        <Stat label="Prodejů" value={String(t.count)} />
+        <Stat label="Hotovost" value={formatKc(t.cashHal)} />
+        <Stat label="Karta" value={formatKc(t.cardHal)} />
       </div>
 
+      {/* Souhrn podle produktů */}
       <section className="rounded-2xl border border-slate-200 bg-white">
-        <h2 className="border-b border-slate-200 px-4 py-3 font-bold text-slate-900">Účtenky</h2>
+        <h2 className="border-b border-slate-200 px-4 py-3 font-bold text-slate-900">Prodej podle produktů</h2>
+        {products.length === 0 ? (
+          <p className="p-6 text-center text-slate-400">V tomto období žádné prodeje.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-100 text-left text-slate-500">
+                <th className="px-4 py-2 font-medium">Produkt</th>
+                <th className="px-4 py-2 text-right font-medium">Kusů</th>
+                <th className="px-4 py-2 text-right font-medium">Tržba</th>
+              </tr>
+            </thead>
+            <tbody>
+              {products.map((p) => (
+                <tr key={p.productId ?? p.name} className="border-b border-slate-50 last:border-0">
+                  <td className="px-4 py-2 font-medium text-slate-800">{p.name}</td>
+                  <td className="px-4 py-2 text-right tabular-nums text-slate-600">{p.qty}</td>
+                  <td className="px-4 py-2 text-right font-semibold tabular-nums text-slate-900">
+                    {formatKc(p.revenueHal)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t border-slate-200 font-bold">
+                <td className="px-4 py-2">Celkem</td>
+                <td className="px-4 py-2 text-right tabular-nums">
+                  {products.reduce((s, p) => s + p.qty, 0)}
+                </td>
+                <td className="px-4 py-2 text-right tabular-nums">{formatKc(t.totalHal)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        )}
+      </section>
+
+      {/* Účtenky */}
+      <section className="rounded-2xl border border-slate-200 bg-white">
+        <h2 className="border-b border-slate-200 px-4 py-3 font-bold text-slate-900">
+          Účtenky {orders.length > 0 && <span className="text-slate-400">({orders.length})</span>}
+        </h2>
         {orders.length === 0 ? (
-          <p className="p-6 text-center text-slate-400">V tento den zatím žádné prodeje.</p>
+          <p className="p-6 text-center text-slate-400">V tomto období žádné prodeje.</p>
         ) : (
           <ul className="divide-y divide-slate-100">
             {orders.map((o) => (
@@ -62,22 +113,18 @@ export default async function ProdejePage({
 }
 
 function OrderRow({ order }: { order: Order }) {
-  const time = new Date(order.createdAt).toLocaleTimeString("cs-CZ", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const dt = new Date(order.createdAt);
+  const when = `${dt.toLocaleDateString("cs-CZ")} ${dt.toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" })}`;
   return (
     <li className="px-4 py-3">
       <details>
         <summary className="flex cursor-pointer list-none items-center justify-between gap-2">
-          <span className="flex items-center gap-3">
+          <span className="flex flex-wrap items-center gap-3">
             <span className="font-bold text-slate-900">#{order.number}</span>
-            <span className="text-sm text-slate-500">{time}</span>
+            <span className="text-sm text-slate-500">{when}</span>
             <span
               className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
-                order.paymentMethod === "cash"
-                  ? "bg-amber-100 text-amber-700"
-                  : "bg-sky-100 text-sky-700"
+                order.paymentMethod === "cash" ? "bg-amber-100 text-amber-700" : "bg-sky-100 text-sky-700"
               }`}
             >
               {order.paymentMethod === "cash" ? "Hotovost" : "Karta"}
