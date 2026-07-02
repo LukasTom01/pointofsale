@@ -1,6 +1,7 @@
+import Link from "next/link";
 import { listOrders } from "@/lib/store";
 import { formatKc } from "@/lib/money";
-import { resolveRange } from "@/lib/dateRange";
+import { resolveRange, presets } from "@/lib/dateRange";
 import { productSummary, totals } from "@/lib/reports";
 import type { Order } from "@/lib/types";
 
@@ -19,9 +20,28 @@ export default async function ProdejePage({
   const t = totals(orders);
   const products = productSummary(orders);
   const exportQs = `from=${fromStr}&to=${toStr}`;
+  const presetList = presets();
+  const activePreset = presetList.find((p) => p.from === fromStr && p.to === toStr)?.key;
 
   return (
     <div className="grid gap-4">
+      {/* Rychlé rozsahy – jedním kliknutím nastaví přehled i export */}
+      <div className="flex flex-wrap gap-2">
+        {presetList.map((p) => (
+          <Link
+            key={p.key}
+            href={`/admin/prodeje?from=${p.from}&to=${p.to}`}
+            className={`rounded-full px-4 py-1.5 text-sm font-semibold transition ${
+              activePreset === p.key
+                ? "bg-slate-900 text-white"
+                : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100"
+            }`}
+          >
+            {p.label}
+          </Link>
+        ))}
+      </div>
+
       <form method="get" className="flex flex-wrap items-end gap-2">
         <label className="flex flex-col text-sm font-medium text-slate-600">
           Od
