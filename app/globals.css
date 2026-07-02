@@ -1,0 +1,22 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  @apply bg-slate-100 text-slate-900 antialiased;
+  /* Zabraň přiblížení dvojklikem na dotykových zařízeních. */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Aktivní stisk dlaždice na dotyku. */
+.tap-active:active {
+  transform: scale(0.97);
+}
