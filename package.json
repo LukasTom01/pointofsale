@@ -10,6 +10,7 @@
     "seed": "tsx scripts/seed.ts"
   },
   "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
     "next": "15.5.20",
     "react": "19.0.0",
     "react-dom": "19.0.0"

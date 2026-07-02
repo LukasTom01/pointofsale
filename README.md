@@ -25,14 +25,15 @@ Brigádník naklikáním sestaví objednávku, aplikace **zaeviduje prodej** a n
 
 - **Next.js 15** (App Router) + **React 19** + **TypeScript**
 - **Tailwind CSS v4**
-- Úložiště: **JSON soubor** za repository rozhraním (`lib/store.ts`)
+- Úložiště: **přepínatelné** za repository rozhraním (`lib/store.ts`)
+  - **Postgres (Neon)** – když je nastavené `DATABASE_URL` (`lib/store/pg.ts`)
+  - **JSON soubor** – jinak, pro lokální vývoj (`lib/store/file.ts`)
 
-> **Poznámka k úložišti:** místo SQL databáze používá appka souborové JSON
-> úložiště. Důvod je čistě provozní (prostředí, kde vznikala, neumělo spolehlivě
-> stáhnout nativní DB binárky). Datová vrstva má ale rozhraní jako repository nad
-> databází, takže se dá **bez zásahu do zbytku aplikace vyměnit za Postgres/Prisma**
-> – stačí přepsat `lib/store.ts`. Pro reálný provoz s více zařízeními a trvalým
-> uložením to doporučuji udělat.
+> **Úložiště:** aplikace si backend vybírá podle proměnné `DATABASE_URL`. Na
+> produkci (Vercel) použijte Postgres přes [Neon](https://neon.tech); lokálně bez
+> `DATABASE_URL` běží vše do souboru `data/db.json`. Obě implementace sdílejí
+> stejné rozhraní (`lib/store/shared.ts`), takže zbytek aplikace je na volbě
+> nezávislý.
 
 ## Spuštění
 
@@ -45,8 +46,24 @@ npm run dev               # vývoj na http://localhost:3000
 npm run build && npm start
 ```
 
-Data se ukládají do `data/db.json` (mimo git). Cestu lze změnit proměnnou
-`DATA_DIR`.
+Bez `DATABASE_URL` se data ukládají do `data/db.json` (mimo git). Cestu lze
+změnit proměnnou `DATA_DIR`.
+
+## Nasazení online (Vercel + Neon Postgres)
+
+1. **Databáze:** na [neon.tech](https://neon.tech) založte projekt a zkopírujte
+   *pooled* connection string (obsahuje `-pooler`, končí `?sslmode=require`).
+2. **Hosting:** na [vercel.com](https://vercel.com) vytvořte projekt z tohoto
+   GitHub repa (framework se detekuje jako Next.js). V *Environment Variables*
+   přidejte `DATABASE_URL` = váš Neon connection string a nasaďte.
+3. **Naplnění produkty:** po nasazení otevřete web – na úvodní obrazovce je
+   tlačítko **„Načíst ukázkové produkty"** (naplní katalog jen když je prázdný),
+   nebo produkty přidejte ručně v administraci. Tabulky v databázi se vytvoří
+   samy při prvním požadavku.
+
+> Endpoint `POST /api/seed` vloží ukázková data pouze do prázdného katalogu
+> (nikdy nemaže). CLI `npm run seed` naopak data **přepíše** – používejte ho jen
+> lokálně.
 
 ## Platba kartou a DISH
 
