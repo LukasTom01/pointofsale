@@ -5,7 +5,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import type { Category, Order, Product } from "../types";
-import type { NewOrderData } from "./shared";
+import type { NewOrderData, OrderPaymentPatch } from "./shared";
 
 interface DbShape {
   categories: Category[];
@@ -53,9 +53,15 @@ async function persist(db: DbShape): Promise<void> {
 async function mutate<T>(fn: (db: DbShape) => T | Promise<T>): Promise<T> {
   const run = async (): Promise<T> => {
     const db = await ensureLoaded();
-    const result = await fn(db);
-    await persist(db);
-    return result;
+    try {
+      const result = await fn(db);
+      await persist(db);
+      return result;
+    } catch (e) {
+      // Zápis selhal – zahoď změny v paměti, ať se neliší od souboru.
+      state.db = null;
+      throw e;
+    }
   };
   const p = state.writeChain.then(run, run);
   state.writeChain = p.then(
@@ -181,6 +187,8 @@ export async function createOrder(data: NewOrderData): Promise<Order> {
       paymentStatus: data.paymentStatus,
       cardProvider: data.cardProvider ?? null,
       cardRef: data.cardRef ?? null,
+      cardServiceId: data.cardServiceId ?? null,
+      paymentMessage: data.paymentMessage ?? null,
       cashGivenHal: data.cashGivenHal ?? null,
       staffName: data.staffName ?? null,
       note: data.note ?? null,
@@ -189,6 +197,25 @@ export async function createOrder(data: NewOrderData): Promise<Order> {
     };
     db.orders.push(order);
     return order;
+  });
+}
+
+export async function getOrder(orderId: string): Promise<Order | null> {
+  const db = await ensureLoaded();
+  return db.orders.find((o) => o.id === orderId) ?? null;
+}
+
+export async function updateOrderPayment(
+  orderId: string,
+  patch: OrderPaymentPatch,
+): Promise<Order | null> {
+  return mutate((db) => {
+    const o = db.orders.find((x) => x.id === orderId);
+    if (!o) return null;
+    for (const [k, v] of Object.entries(patch)) {
+      if (v !== undefined) (o as unknown as Record<string, unknown>)[k] = v;
+    }
+    return { ...o };
   });
 }
 

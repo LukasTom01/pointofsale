@@ -4,6 +4,14 @@ import { formatKc } from "@/lib/money";
 import { resolveRange, presets } from "@/lib/dateRange";
 import { productSummary, totals } from "@/lib/reports";
 import type { Order } from "@/lib/types";
+import VerifyPaymentButton from "@/components/VerifyPaymentButton";
+
+const STATUS_LABEL: Record<Order["paymentStatus"], { text: string; cls: string }> = {
+  paid: { text: "Zaplaceno", cls: "bg-emerald-100 text-emerald-700" },
+  pending: { text: "Čeká na ověření", cls: "bg-amber-100 text-amber-800" },
+  failed: { text: "Neproběhla", cls: "bg-red-100 text-red-700" },
+  canceled: { text: "Zrušeno", cls: "bg-slate-200 text-slate-600" },
+};
 
 export const dynamic = "force-dynamic";
 
@@ -150,13 +158,25 @@ function OrderRow({ order }: { order: Order }) {
               {order.paymentMethod === "cash" ? "Hotovost" : "Karta"}
             </span>
             {order.paymentStatus !== "paid" && (
-              <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">
-                {order.paymentStatus}
+              <span
+                className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                  STATUS_LABEL[order.paymentStatus]?.cls ?? "bg-red-100 text-red-700"
+                }`}
+              >
+                {STATUS_LABEL[order.paymentStatus]?.text ?? order.paymentStatus}
               </span>
             )}
           </span>
           <span className="font-bold text-slate-900">{formatKc(order.totalHal)}</span>
         </summary>
+        {order.paymentStatus === "pending" && order.cardProvider === "adyen" && (
+          <div className="mt-2">
+            <VerifyPaymentButton orderId={order.id} />
+          </div>
+        )}
+        {order.paymentStatus !== "paid" && order.paymentMessage && (
+          <p className="mt-2 text-xs text-slate-500">{order.paymentMessage}</p>
+        )}
         <ul className="mt-2 space-y-1 pl-1 text-sm text-slate-600">
           {order.items.map((it, i) => (
             <li key={i} className="flex justify-between">
