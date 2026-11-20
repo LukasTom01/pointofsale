@@ -104,8 +104,14 @@ export default function Pos({ categories, products, cardProvider }: Props) {
                 onClick={() => addToCart(p)}
                 className="tap-active flex h-24 flex-col items-center justify-center gap-0.5 rounded-xl border border-slate-200 bg-white px-1 py-1.5 text-center shadow-sm transition hover:border-slate-300 hover:shadow sm:h-28"
               >
-                <span className="text-2xl leading-none">{p.emoji ?? "🛒"}</span>
-                <span className="line-clamp-2 text-[13px] font-semibold leading-tight text-slate-800">{p.name}</span>
+                {p.emoji?.trim() && <span className="text-2xl leading-none">{p.emoji}</span>}
+                <span
+                  className={`line-clamp-2 font-semibold leading-tight text-slate-800 ${
+                    p.emoji?.trim() ? "text-[13px]" : "text-[15px]"
+                  }`}
+                >
+                  {p.name}
+                </span>
                 <span className="text-[13px] font-bold text-emerald-700">{formatKc(p.priceHal)}</span>
               </button>
             ))}
@@ -135,7 +141,7 @@ export default function Pos({ categories, products, cardProvider }: Props) {
                 <li key={l.product.id} className="flex items-center gap-2 px-3 py-1.5">
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-slate-800">
-                      {l.product.emoji} {l.product.name}
+                      {l.product.emoji?.trim() ? `${l.product.emoji} ` : ""}{l.product.name}
                     </p>
                     <p className="text-xs text-slate-500">
                       {formatKc(l.product.priceHal)} · <span className="font-semibold text-slate-700">{formatKc(l.product.priceHal * l.qty)}</span>
