@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import type { Category, Product, CardProvider, Order } from "@/lib/types";
+import type { Category, Product, CardProvider, Order, StaffMember } from "@/lib/types";
 import { formatKc } from "@/lib/money";
 import Checkout from "@/components/Checkout";
 import FullscreenButton from "@/components/FullscreenButton";
@@ -11,6 +11,7 @@ interface Props {
   categories: Category[];
   products: Product[];
   cardProvider: CardProvider;
+  staff: StaffMember[];
 }
 
 export interface CartLine {
@@ -18,7 +19,7 @@ export interface CartLine {
   qty: number;
 }
 
-export default function Pos({ categories, products, cardProvider }: Props) {
+export default function Pos({ categories, products, cardProvider, staff }: Props) {
   const [activeCat, setActiveCat] = useState<string | "all">("all");
   const [cart, setCart] = useState<CartLine[]>([]);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
@@ -32,13 +33,13 @@ export default function Pos({ categories, products, cardProvider }: Props) {
   const totalHal = useMemo(() => cart.reduce((s, l) => s + l.product.priceHal * l.qty, 0), [cart]);
   const totalQty = useMemo(() => cart.reduce((s, l) => s + l.qty, 0), [cart]);
 
+  // Naposledy přidaný produkt jde vždy nahoru (i když už v košíku byl) –
+  // obsluha nejčastěji upravuje počet kusů toho, co právě přidala.
   function addToCart(product: Product) {
     setCart((prev) => {
-      const idx = prev.findIndex((l) => l.product.id === product.id);
-      if (idx === -1) return [...prev, { product, qty: 1 }];
-      const next = [...prev];
-      next[idx] = { ...next[idx], qty: next[idx].qty + 1 };
-      return next;
+      const existing = prev.find((l) => l.product.id === product.id);
+      const rest = prev.filter((l) => l.product.id !== product.id);
+      return [{ product, qty: (existing?.qty ?? 0) + 1 }, ...rest];
     });
   }
 
@@ -185,6 +186,7 @@ export default function Pos({ categories, products, cardProvider }: Props) {
           cart={cart}
           totalHal={totalHal}
           cardProvider={cardProvider}
+          staff={staff}
           onClose={() => setCheckoutOpen(false)}
           onPaid={onPaid}
         />
@@ -233,6 +235,7 @@ function QtyBtn({ children, onClick, label }: { children: React.ReactNode; onCli
 }
 
 function ReceiptModal({ order, onClose }: { order: Order; onClose: () => void }) {
+  const isAccount = order.paymentMethod === "account";
   const change =
     order.paymentMethod === "cash" && order.cashGivenHal != null
       ? order.cashGivenHal - order.totalHal
@@ -243,14 +246,22 @@ function ReceiptModal({ order, onClose }: { order: Order; onClose: () => void })
         className="w-full max-w-sm rounded-3xl bg-white p-6 text-center shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 text-4xl">
-          ✅
+        <div
+          className={`mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full text-4xl ${
+            isAccount ? "bg-violet-100" : "bg-emerald-100"
+          }`}
+        >
+          {isAccount ? "👤" : "✅"}
         </div>
-        <h2 className="text-xl font-bold text-slate-900">Zaplaceno</h2>
+        <h2 className="text-xl font-bold text-slate-900">{isAccount ? "Zapsáno na účet" : "Zaplaceno"}</h2>
         <p className="mt-1 text-slate-500">Účtenka č. {order.number}</p>
         <p className="mt-4 text-3xl font-extrabold">{formatKc(order.totalHal)}</p>
         <p className="mt-1 text-sm text-slate-500">
-          {order.paymentMethod === "cash" ? "Hotovost" : "Karta"}
+          {order.paymentMethod === "cash"
+            ? "Hotovost"
+            : order.paymentMethod === "card"
+              ? "Karta"
+              : `Na účet: ${order.accountName ?? ""}`}
         </p>
         {change != null && change > 0 && (
           <p className="mt-3 rounded-xl bg-amber-50 py-3 text-lg font-bold text-amber-700">

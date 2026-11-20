@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { CardProvider, Order } from "@/lib/types";
+import type { CardProvider, Order, StaffMember } from "@/lib/types";
 import { formatKc, kcToHal } from "@/lib/money";
 import type { CartLine } from "@/components/Pos";
 
@@ -9,13 +9,14 @@ interface Props {
   cart: CartLine[];
   totalHal: number;
   cardProvider: CardProvider;
+  staff: StaffMember[];
   onClose: () => void;
   onPaid: (order: Order) => void;
 }
 
-type Step = "method" | "cash" | "card";
+type Step = "method" | "cash" | "card" | "account";
 
-export default function Checkout({ cart, totalHal, cardProvider, onClose, onPaid }: Props) {
+export default function Checkout({ cart, totalHal, cardProvider, staff, onClose, onPaid }: Props) {
   const [step, setStep] = useState<Step>("method");
   const [cashGiven, setCashGiven] = useState<string>("");
   const [busy, setBusy] = useState(false);
@@ -78,8 +79,9 @@ export default function Checkout({ cart, totalHal, cardProvider, onClose, onPaid
   const changeHal = cashGivenHal != null ? cashGivenHal - totalHal : null;
 
   async function submit(payload: {
-    paymentMethod: "cash" | "card";
+    paymentMethod: "cash" | "card" | "account";
     cashGivenHal?: number | null;
+    accountStaffId?: string;
   }) {
     setBusy(true);
     setError(null);
@@ -146,7 +148,7 @@ export default function Checkout({ cart, totalHal, cardProvider, onClose, onPaid
             <div className="grid gap-3">
               <button
                 onClick={() => setStep("cash")}
-                className="tap-active flex items-center gap-4 rounded-2xl border-2 border-slate-200 p-5 text-left hover:border-emerald-400"
+                className="tap-active flex items-center gap-4 rounded-2xl border-2 border-slate-200 p-4 text-left hover:border-emerald-400"
               >
                 <span className="text-4xl">💵</span>
                 <span>
@@ -156,7 +158,7 @@ export default function Checkout({ cart, totalHal, cardProvider, onClose, onPaid
               </button>
               <button
                 onClick={() => setStep("card")}
-                className="tap-active flex items-center gap-4 rounded-2xl border-2 border-slate-200 p-5 text-left hover:border-emerald-400"
+                className="tap-active flex items-center gap-4 rounded-2xl border-2 border-slate-200 p-4 text-left hover:border-emerald-400"
               >
                 <span className="text-4xl">💳</span>
                 <span>
@@ -168,7 +170,26 @@ export default function Checkout({ cart, totalHal, cardProvider, onClose, onPaid
                   </span>
                 </span>
               </button>
+              <button
+                onClick={() => setStep("account")}
+                className="tap-active flex items-center gap-4 rounded-2xl border-2 border-slate-200 p-4 text-left hover:border-violet-400"
+              >
+                <span className="text-4xl">👤</span>
+                <span>
+                  <span className="block text-lg font-bold text-slate-900">Na účet</span>
+                  <span className="text-sm text-slate-500">Zdarma pro zaměstnance – jen se zaeviduje</span>
+                </span>
+              </button>
             </div>
+          )}
+
+          {step === "account" && (
+            <AccountStep
+              staff={staff}
+              totalHal={totalHal}
+              busy={busy}
+              onConfirm={(staffId) => submit({ paymentMethod: "account", accountStaffId: staffId })}
+            />
           )}
 
           {step === "cash" && (
@@ -260,6 +281,68 @@ export default function Checkout({ cart, totalHal, cardProvider, onClose, onPaid
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function AccountStep({
+  staff,
+  totalHal,
+  busy,
+  onConfirm,
+}: {
+  staff: StaffMember[];
+  totalHal: number;
+  busy: boolean;
+  onConfirm: (staffId: string) => void;
+}) {
+  const [selected, setSelected] = useState<string | null>(null);
+  const person = staff.find((s) => s.id === selected);
+
+  if (staff.length === 0) {
+    return (
+      <div className="rounded-2xl bg-slate-50 p-5 text-center text-slate-600">
+        <p className="text-3xl">👤</p>
+        <p className="mt-2 font-semibold">Zatím tu nikdo není.</p>
+        <p className="mt-1 text-sm">
+          Lidi, kterým lze zapisovat na účet, přidáte v{" "}
+          <a href="/admin/lide" className="font-semibold text-violet-700 underline">
+            administraci → Lidé
+          </a>
+          .
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <p className="mb-3 text-sm text-slate-600">Kdo si objednávku bere?</p>
+      <div className="grid grid-cols-2 gap-2">
+        {staff.map((s) => (
+          <button
+            key={s.id}
+            onClick={() => setSelected(s.id)}
+            className={`tap-active truncate rounded-xl border-2 px-3 py-3 text-left font-semibold ${
+              selected === s.id
+                ? "border-violet-500 bg-violet-50 text-violet-800"
+                : "border-slate-200 text-slate-800 hover:border-violet-300"
+            }`}
+          >
+            👤 {s.name}
+          </button>
+        ))}
+      </div>
+      <button
+        disabled={busy || !person}
+        onClick={() => person && onConfirm(person.id)}
+        className="tap-active mt-4 w-full rounded-2xl bg-violet-600 py-4 text-lg font-bold text-white disabled:bg-slate-300"
+      >
+        {busy ? "Ukládám…" : person ? `Zapsat na účet: ${person.name}` : "Vyberte osobu"}
+      </button>
+      <p className="mt-2 text-center text-xs text-slate-400">
+        Hodnota {formatKc(totalHal)} se zaeviduje, ale nepočítá se do tržby.
+      </p>
     </div>
   );
 }

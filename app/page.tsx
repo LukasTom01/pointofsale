@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { listCategories, listProducts } from "@/lib/store";
+import { listCategories, listProducts, listStaff } from "@/lib/store";
 import { activeCardProvider } from "@/lib/payments";
 import Pos from "@/components/Pos";
 import SeedButton from "@/components/SeedButton";
@@ -7,9 +7,10 @@ import SeedButton from "@/components/SeedButton";
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  const [categories, products] = await Promise.all([
+  const [categories, products, staff] = await Promise.all([
     listCategories(),
     listProducts({ activeOnly: true }),
+    listStaff({ activeOnly: true }),
   ]);
 
   const empty = products.length === 0;
@@ -33,6 +34,7 @@ export default async function Home() {
           categories={categories}
           products={products}
           cardProvider={activeCardProvider()}
+          staff={staff}
         />
       )}
     </div>
