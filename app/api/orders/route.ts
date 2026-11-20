@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server";
 import { listOrders } from "@/lib/store";
-import { placeOrder, OrderError } from "@/lib/orders";
+import { placeOrder, OrderError, PaymentPendingError } from "@/lib/orders";
 import type { CreateOrderInput } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+// Platba kartou na terminálu (Adyen) může běžet déle – necháme routě víc času.
+// Musí pokrýt ADYEN_TIMEOUT_MS (výchozí 90 s) + dohledání stavu (~30 s).
+// Kdyby funkci platforma přesto ukončila, objednávka zůstane "pending" a jde ověřit.
+export const maxDuration = 130;
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -32,6 +36,10 @@ export async function POST(request: Request) {
     const order = await placeOrder(body);
     return NextResponse.json(order, { status: 201 });
   } catch (e) {
+    if (e instanceof PaymentPendingError) {
+      // 202: objednávka je uložená, ale výsledek platby zatím není jistý.
+      return NextResponse.json({ error: e.message, pending: true, order: e.order }, { status: 202 });
+    }
     if (e instanceof OrderError) {
       return NextResponse.json({ error: e.message }, { status: 400 });
     }

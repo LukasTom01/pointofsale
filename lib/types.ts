@@ -22,8 +22,12 @@ export interface Product {
 }
 
 export type PaymentMethod = "cash" | "card";
-export type PaymentStatus = "paid" | "failed" | "canceled";
-export type CardProvider = "manual" | "dish";
+// "pending" = platba odeslaná do terminálu, výsledek zatím není jistý
+// (objednávka se ukládá před odesláním, aby žádná platba nezůstala bez záznamu).
+export type PaymentStatus = "pending" | "paid" | "failed" | "canceled";
+// "manual" = ruční potvrzení na terminálu; "adyen" = automatické odeslání
+// do terminálu přes Adyen Terminal API.
+export type CardProvider = "manual" | "adyen";
 
 export interface OrderItem {
   productId?: string | null;
@@ -41,6 +45,8 @@ export interface Order {
   paymentStatus: PaymentStatus;
   cardProvider?: CardProvider | null;
   cardRef?: string | null; // reference transakce z terminálu
+  cardServiceId?: string | null; // ServiceID požadavku na terminál (pro dohledání stavu)
+  paymentMessage?: string | null; // důvod zamítnutí / poznámka k platbě
   cashGivenHal?: number | null;
   staffName?: string | null;
   note?: string | null;
@@ -52,6 +58,8 @@ export interface Order {
 export interface CreateOrderInput {
   items: { productId: string; quantity: number }[];
   paymentMethod: PaymentMethod;
+  // Pozn.: způsob zpracování karty (ruční / terminál) určuje server podle
+  // konfigurace; hodnota z klienta se ignoruje.
   cardProvider?: CardProvider | null;
   cardRef?: string | null;
   cashGivenHal?: number | null;

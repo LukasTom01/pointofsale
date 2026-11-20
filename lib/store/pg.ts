@@ -7,7 +7,7 @@
 import { neon } from "@neondatabase/serverless";
 import crypto from "node:crypto";
 import type { Category, Order, OrderItem, Product } from "../types";
-import type { NewOrderData } from "./shared";
+import type { NewOrderData, OrderPaymentPatch } from "./shared";
 
 function db() {
   const url = process.env.DATABASE_URL;
@@ -65,6 +65,9 @@ export function ensureSchema(): Promise<void> {
       quantity INT NOT NULL,
       line_hal INT NOT NULL
     )`;
+    // Doplňkové sloupce pro dohledání stavu platby na terminálu (migrace).
+    await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS card_service_id TEXT`;
+    await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_message TEXT`;
     await sql`CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_id)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_items_order ON order_items(order_id)`;
@@ -116,6 +119,8 @@ function toOrder(r: Row, items: OrderItem[]): Order {
     paymentStatus: r.payment_status as Order["paymentStatus"],
     cardProvider: (r.card_provider as Order["cardProvider"]) ?? null,
     cardRef: (r.card_ref as string) ?? null,
+    cardServiceId: (r.card_service_id as string) ?? null,
+    paymentMessage: (r.payment_message as string) ?? null,
     cashGivenHal: r.cash_given_hal != null ? Number(r.cash_given_hal) : null,
     staffName: (r.staff_name as string) ?? null,
     note: (r.note as string) ?? null,
@@ -260,9 +265,10 @@ export async function createOrder(data: NewOrderData): Promise<Order> {
     const createdAt = nowIso();
     const inserted = (await sql`INSERT INTO orders
       (id, total_hal, payment_method, payment_status, card_provider, card_ref,
-       cash_given_hal, staff_name, note, created_at)
+       card_service_id, payment_message, cash_given_hal, staff_name, note, created_at)
       VALUES (${orderId}, ${data.totalHal}, ${data.paymentMethod}, ${data.paymentStatus},
-        ${data.cardProvider ?? null}, ${data.cardRef ?? null}, ${data.cashGivenHal ?? null},
+        ${data.cardProvider ?? null}, ${data.cardRef ?? null}, ${data.cardServiceId ?? null},
+        ${data.paymentMessage ?? null}, ${data.cashGivenHal ?? null},
         ${data.staffName ?? null}, ${data.note ?? null}, ${createdAt})
       RETURNING number`) as Row[];
 
@@ -281,6 +287,8 @@ export async function createOrder(data: NewOrderData): Promise<Order> {
       paymentStatus: data.paymentStatus,
       cardProvider: data.cardProvider ?? null,
       cardRef: data.cardRef ?? null,
+      cardServiceId: data.cardServiceId ?? null,
+      paymentMessage: data.paymentMessage ?? null,
       cashGivenHal: data.cashGivenHal ?? null,
       staffName: data.staffName ?? null,
       note: data.note ?? null,
@@ -288,6 +296,48 @@ export async function createOrder(data: NewOrderData): Promise<Order> {
       createdAt,
     };
   });
+}
+
+async function loadItems(sql: Sql, ids: string[]): Promise<Map<string, OrderItem[]>> {
+  const itemRows = (await sql`SELECT * FROM order_items WHERE order_id = ANY(${ids})`) as Row[];
+  const byOrder = new Map<string, OrderItem[]>();
+  for (const ir of itemRows) {
+    const arr = byOrder.get(ir.order_id as string) ?? [];
+    arr.push({
+      productId: (ir.product_id as string) ?? null,
+      name: ir.name as string,
+      priceHal: Number(ir.price_hal),
+      quantity: Number(ir.quantity),
+      lineHal: Number(ir.line_hal),
+    });
+    byOrder.set(ir.order_id as string, arr);
+  }
+  return byOrder;
+}
+
+export async function getOrder(orderId: string): Promise<Order | null> {
+  return q(async (sql) => {
+    const rows = (await sql`SELECT * FROM orders WHERE id = ${orderId}`) as Row[];
+    if (rows.length === 0) return null;
+    const items = await loadItems(sql, [orderId]);
+    return toOrder(rows[0], items.get(orderId) ?? []);
+  });
+}
+
+export async function updateOrderPayment(
+  orderId: string,
+  patch: OrderPaymentPatch,
+): Promise<Order | null> {
+  await q(async (sql) => {
+    // COALESCE: nevyplněná pole patche ponechají původní hodnotu.
+    await sql`UPDATE orders SET
+      payment_status = COALESCE(${patch.paymentStatus ?? null}, payment_status),
+      card_ref = COALESCE(${patch.cardRef ?? null}, card_ref),
+      card_service_id = COALESCE(${patch.cardServiceId ?? null}, card_service_id),
+      payment_message = COALESCE(${patch.paymentMessage ?? null}, payment_message)
+      WHERE id = ${orderId}`;
+  });
+  return getOrder(orderId);
 }
 
 export async function listOrders(opts?: {
@@ -309,19 +359,7 @@ export async function listOrders(opts?: {
     if (limited.length === 0) return [];
 
     const ids = limited.map((r) => r.id as string);
-    const itemRows = (await sql`SELECT * FROM order_items WHERE order_id = ANY(${ids})`) as Row[];
-    const byOrder = new Map<string, OrderItem[]>();
-    for (const ir of itemRows) {
-      const arr = byOrder.get(ir.order_id as string) ?? [];
-      arr.push({
-        productId: (ir.product_id as string) ?? null,
-        name: ir.name as string,
-        priceHal: Number(ir.price_hal),
-        quantity: Number(ir.quantity),
-        lineHal: Number(ir.line_hal),
-      });
-      byOrder.set(ir.order_id as string, arr);
-    }
+    const byOrder = await loadItems(sql, ids);
     return limited.map((r) => toOrder(r, byOrder.get(r.id as string) ?? []));
   });
 }
