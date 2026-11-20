@@ -6,6 +6,10 @@ export const metadata: Metadata = {
   title: "Stánkový prodej – POS",
   description: "Rychlé zadávání objednávek a evidence prodeje na stánku.",
   manifest: "/manifest.webmanifest",
+  icons: {
+    icon: [{ url: "/icon-192.png", sizes: "192x192", type: "image/png" }],
+    apple: "/apple-touch-icon.png",
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
