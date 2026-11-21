@@ -2,8 +2,8 @@
 // Strategie: pro navigaci network-first (aby data byla čerstvá), s fallbackem
 // na cache když je zařízení offline; statické assety cache-first.
 
-const CACHE = "pos-v1";
-const APP_SHELL = ["/", "/manifest.webmanifest", "/icon.svg"];
+const CACHE = "pos-v2";
+const APP_SHELL = ["/", "/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

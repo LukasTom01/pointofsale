@@ -4,14 +4,15 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import type { Category, Order, Product } from "../types";
-import type { NewOrderData } from "./shared";
+import type { Category, Order, Product, StaffMember } from "../types";
+import type { NewOrderData, OrderPaymentPatch } from "./shared";
 
 interface DbShape {
   categories: Category[];
   products: Product[];
   orders: Order[];
   orderSeq: number;
+  staff: StaffMember[];
 }
 
 const DATA_DIR = process.env.DATA_DIR
@@ -20,7 +21,7 @@ const DATA_DIR = process.env.DATA_DIR
 const DB_FILE = path.join(DATA_DIR, "db.json");
 
 function emptyDb(): DbShape {
-  return { categories: [], products: [], orders: [], orderSeq: 0 };
+  return { categories: [], products: [], orders: [], orderSeq: 0, staff: [] };
 }
 
 interface StoreState {
@@ -53,9 +54,15 @@ async function persist(db: DbShape): Promise<void> {
 async function mutate<T>(fn: (db: DbShape) => T | Promise<T>): Promise<T> {
   const run = async (): Promise<T> => {
     const db = await ensureLoaded();
-    const result = await fn(db);
-    await persist(db);
-    return result;
+    try {
+      const result = await fn(db);
+      await persist(db);
+      return result;
+    } catch (e) {
+      // Zápis selhal – zahoď změny v paměti, ať se neliší od souboru.
+      state.db = null;
+      throw e;
+    }
   };
   const p = state.writeChain.then(run, run);
   state.writeChain = p.then(
@@ -181,7 +188,11 @@ export async function createOrder(data: NewOrderData): Promise<Order> {
       paymentStatus: data.paymentStatus,
       cardProvider: data.cardProvider ?? null,
       cardRef: data.cardRef ?? null,
+      cardServiceId: data.cardServiceId ?? null,
+      paymentMessage: data.paymentMessage ?? null,
       cashGivenHal: data.cashGivenHal ?? null,
+      accountStaffId: data.accountStaffId ?? null,
+      accountName: data.accountName ?? null,
       staffName: data.staffName ?? null,
       note: data.note ?? null,
       items: data.items,
@@ -189,6 +200,25 @@ export async function createOrder(data: NewOrderData): Promise<Order> {
     };
     db.orders.push(order);
     return order;
+  });
+}
+
+export async function getOrder(orderId: string): Promise<Order | null> {
+  const db = await ensureLoaded();
+  return db.orders.find((o) => o.id === orderId) ?? null;
+}
+
+export async function updateOrderPayment(
+  orderId: string,
+  patch: OrderPaymentPatch,
+): Promise<Order | null> {
+  return mutate((db) => {
+    const o = db.orders.find((x) => x.id === orderId);
+    if (!o) return null;
+    for (const [k, v] of Object.entries(patch)) {
+      if (v !== undefined) (o as unknown as Record<string, unknown>)[k] = v;
+    }
+    return { ...o };
   });
 }
 
@@ -202,6 +232,60 @@ export async function listOrders(opts?: { from?: Date; to?: Date; limit?: number
   return items;
 }
 
+// --- Lidé „na účet“ ---
+
+export async function listStaff(opts?: { activeOnly?: boolean }): Promise<StaffMember[]> {
+  const db = await ensureLoaded();
+  return db.staff
+    .filter((s) => !opts?.activeOnly || s.active)
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "cs"));
+}
+
+export async function getStaff(staffId: string): Promise<StaffMember | null> {
+  const db = await ensureLoaded();
+  return db.staff.find((s) => s.id === staffId) ?? null;
+}
+
+export async function createStaff(input: {
+  name: string;
+  active?: boolean;
+  sortOrder?: number;
+}): Promise<StaffMember> {
+  return mutate((db) => {
+    const member: StaffMember = {
+      id: id(),
+      name: input.name,
+      active: input.active ?? true,
+      sortOrder: input.sortOrder ?? db.staff.length,
+      createdAt: nowIso(),
+    };
+    db.staff.push(member);
+    return member;
+  });
+}
+
+export async function updateStaff(
+  staffId: string,
+  patch: Partial<Pick<StaffMember, "name" | "active" | "sortOrder">>,
+): Promise<StaffMember | null> {
+  return mutate((db) => {
+    const m = db.staff.find((s) => s.id === staffId);
+    if (!m) return null;
+    if (patch.name !== undefined) m.name = patch.name;
+    if (patch.active !== undefined) m.active = patch.active;
+    if (patch.sortOrder !== undefined) m.sortOrder = patch.sortOrder;
+    return { ...m };
+  });
+}
+
+export async function deleteStaff(staffId: string): Promise<boolean> {
+  return mutate((db) => {
+    const before = db.staff.length;
+    db.staff = db.staff.filter((s) => s.id !== staffId);
+    return db.staff.length < before;
+  });
+}
+
 // Smaže vše a nechá prázdné úložiště (pro seed).
 export async function resetAll(): Promise<void> {
   await mutate((db) => {
@@ -209,6 +293,7 @@ export async function resetAll(): Promise<void> {
     db.products = [];
     db.orders = [];
     db.orderSeq = 0;
+    db.staff = [];
   });
 }
 

@@ -2,8 +2,16 @@ import Link from "next/link";
 import { listOrders } from "@/lib/store";
 import { formatKc } from "@/lib/money";
 import { resolveRange, presets } from "@/lib/dateRange";
-import { productSummary, totals } from "@/lib/reports";
+import { accountSummary, productSummary, totals } from "@/lib/reports";
 import type { Order } from "@/lib/types";
+import VerifyPaymentButton from "@/components/VerifyPaymentButton";
+
+const STATUS_LABEL: Record<Order["paymentStatus"], { text: string; cls: string }> = {
+  paid: { text: "Zaplaceno", cls: "bg-emerald-100 text-emerald-700" },
+  pending: { text: "Čeká na ověření", cls: "bg-amber-100 text-amber-800" },
+  failed: { text: "Neproběhla", cls: "bg-red-100 text-red-700" },
+  canceled: { text: "Zrušeno", cls: "bg-slate-200 text-slate-600" },
+};
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +27,7 @@ export default async function ProdejePage({
 
   const t = totals(orders);
   const products = productSummary(orders);
+  const account = accountSummary(orders);
   const exportQs = `from=${fromStr}&to=${toStr}`;
   const presetList = presets();
   const activePreset = presetList.find((p) => p.from === fromStr && p.to === toStr)?.key;
@@ -74,6 +83,12 @@ export default async function ProdejePage({
         <Stat label="Hotovost" value={formatKc(t.cashHal)} />
         <Stat label="Karta" value={formatKc(t.cardHal)} />
       </div>
+      {t.accountCount > 0 && (
+        <p className="-mt-2 text-sm text-slate-500">
+          Mimo tržbu: <strong className="text-violet-700">na účet {formatKc(t.accountHal)}</strong> ({t.accountCount}{" "}
+          {t.accountCount === 1 ? "objednávka" : t.accountCount < 5 ? "objednávky" : "objednávek"})
+        </p>
+      )}
 
       {/* Souhrn podle produktů */}
       <section className="rounded-2xl border border-slate-200 bg-white">
@@ -114,6 +129,33 @@ export default async function ProdejePage({
       </section>
 
       {/* Účtenky */}
+      {/* Na účet – zboží vydané zdarma zaměstnancům/brigádníkům */}
+      {account.length > 0 && (
+        <section className="rounded-2xl border border-violet-200 bg-white">
+          <h2 className="border-b border-violet-100 px-4 py-3 font-bold text-slate-900">
+            👤 Na účet podle osob <span className="font-normal text-slate-400">(nepočítá se do tržby)</span>
+          </h2>
+          <ul className="divide-y divide-slate-100">
+            {account.map((a) => (
+              <li key={a.key} className="px-4 py-3">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="font-semibold text-slate-900">
+                    {a.name}{" "}
+                    <span className="text-sm font-normal text-slate-400">
+                      ({a.orders} {a.orders === 1 ? "objednávka" : a.orders < 5 ? "objednávky" : "objednávek"})
+                    </span>
+                  </span>
+                  <span className="font-bold tabular-nums text-violet-700">{formatKc(a.valueHal)}</span>
+                </div>
+                <p className="mt-0.5 text-sm text-slate-500">
+                  {a.items.map((it) => `${it.qty}× ${it.name}`).join(", ")}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <section className="rounded-2xl border border-slate-200 bg-white">
         <h2 className="border-b border-slate-200 px-4 py-3 font-bold text-slate-900">
           Účtenky {orders.length > 0 && <span className="text-slate-400">({orders.length})</span>}
@@ -144,19 +186,39 @@ function OrderRow({ order }: { order: Order }) {
             <span className="text-sm text-slate-500">{when}</span>
             <span
               className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
-                order.paymentMethod === "cash" ? "bg-amber-100 text-amber-700" : "bg-sky-100 text-sky-700"
+                order.paymentMethod === "cash"
+                  ? "bg-amber-100 text-amber-700"
+                  : order.paymentMethod === "card"
+                    ? "bg-sky-100 text-sky-700"
+                    : "bg-violet-100 text-violet-700"
               }`}
             >
-              {order.paymentMethod === "cash" ? "Hotovost" : "Karta"}
+              {order.paymentMethod === "cash"
+                ? "Hotovost"
+                : order.paymentMethod === "card"
+                  ? "Karta"
+                  : `👤 Na účet · ${order.accountName ?? "?"}`}
             </span>
             {order.paymentStatus !== "paid" && (
-              <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">
-                {order.paymentStatus}
+              <span
+                className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                  STATUS_LABEL[order.paymentStatus]?.cls ?? "bg-red-100 text-red-700"
+                }`}
+              >
+                {STATUS_LABEL[order.paymentStatus]?.text ?? order.paymentStatus}
               </span>
             )}
           </span>
           <span className="font-bold text-slate-900">{formatKc(order.totalHal)}</span>
         </summary>
+        {order.paymentStatus === "pending" && order.cardProvider === "adyen" && (
+          <div className="mt-2">
+            <VerifyPaymentButton orderId={order.id} />
+          </div>
+        )}
+        {order.paymentStatus !== "paid" && order.paymentMessage && (
+          <p className="mt-2 text-xs text-slate-500">{order.paymentMessage}</p>
+        )}
         <ul className="mt-2 space-y-1 pl-1 text-sm text-slate-600">
           {order.items.map((it, i) => (
             <li key={i} className="flex justify-between">

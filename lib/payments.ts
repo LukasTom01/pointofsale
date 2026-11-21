@@ -13,15 +13,23 @@
 // Přidání dalšího poskytovatele = přidat další větev; zbytek appky se nemění.
 
 import type { CardProvider } from "./types";
-import { getAdyenConfig, isAdyenConfigured, terminalPayment } from "./adyen";
+import {
+  getAdyenConfig,
+  isAdyenConfigured,
+  resolveUnknownPayment,
+  terminalPayment,
+  type TerminalOutcome,
+} from "./adyen";
 
 export interface CardChargeRequest {
   amountHal: number;
   reference: string; // naše interní reference (např. číslo účtenky / čas)
+  serviceId: string; // ServiceID požadavku (uložené u objednávky předem)
 }
 
 export interface CardChargeResult {
-  status: "approved" | "declined";
+  // "unknown" = odpověď z terminálu nedorazila a stav se nepodařilo dohledat.
+  status: TerminalOutcome;
   provider: CardProvider;
   transactionRef?: string;
   message?: string;
@@ -35,22 +43,45 @@ export function activeCardProvider(): CardProvider {
   return isAdyenConfigured() ? "adyen" : "manual";
 }
 
-/** Odeslání platby do terminálu přes Adyen Terminal API. */
-export async function chargeViaAdyen(req: CardChargeRequest): Promise<CardChargeResult> {
+function requireAdyen() {
   const cfg = getAdyenConfig();
   if (!cfg) {
     throw new Error(
       "Adyen není nakonfigurovaný. Doplňte ADYEN_API_KEY a ADYEN_POI_ID (nebo ADYEN_SIMULATE=1).",
     );
   }
-  const result = await terminalPayment(cfg, {
+  return cfg;
+}
+
+/**
+ * Odeslání platby do terminálu přes Adyen Terminal API.
+ * Když odpověď nedorazí, rovnou se pokusí stav dohledat (a případně platbu
+ * na terminálu zrušit), aby obsluha nemusela nic řešit.
+ */
+export async function chargeViaAdyen(req: CardChargeRequest): Promise<CardChargeResult> {
+  const cfg = requireAdyen();
+  let result = await terminalPayment(cfg, {
     amountHal: req.amountHal,
     reference: req.reference,
+    serviceId: req.serviceId,
   });
+  if (result.outcome === "unknown") {
+    const resolved = await resolveUnknownPayment(cfg, req.serviceId, { abortIfRunning: true });
+    result = resolved.outcome === "unknown"
+      ? { ...resolved, message: `${result.message} ${resolved.message ?? ""}`.trim() }
+      : resolved;
+  }
   return {
-    status: result.approved ? "approved" : "declined",
+    status: result.outcome,
     provider: "adyen",
     transactionRef: result.transactionRef,
     message: result.message,
   };
+}
+
+/** Dodatečné ověření platby, jejíž výsledek nebyl jistý (bez rušení platby). */
+export async function verifyAdyenPayment(serviceId: string): Promise<CardChargeResult> {
+  const cfg = requireAdyen();
+  const r = await resolveUnknownPayment(cfg, serviceId, { attempts: 1, abortIfRunning: false });
+  return { status: r.outcome, provider: "adyen", transactionRef: r.transactionRef, message: r.message };
 }

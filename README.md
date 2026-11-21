@@ -82,6 +82,21 @@ account a POIID k jejich terminálu, funguje tohle napojení rovnou na stávají
 DISH PAY NOW – bez nového hardwaru. Jinak platí pro vlastní Adyen účet + Adyen
 terminál.
 
+**Spolehlivost platby kartou (Adyen):**
+
+1. Objednávka se **uloží dřív, než se platba pošle do terminálu** – se stavem
+   *Čeká na ověření* (`pending`). Když selže databáze, z karty se nic nestrhne.
+2. Terminál vrátí výsledek → objednávka se označí jako zaplacená / neproběhlá.
+3. Když odpověď nedorazí (timeout, výpadek sítě), appka se Adyenu zeptá na
+   stav transakce (*TransactionStatus*); pokud platba na terminálu ještě běží,
+   zruší ji (*AbortRequest*) a zeptá se znovu.
+4. Když ani tak stav nezjistí, objednávka zůstane *Čeká na ověření* a obsluha
+   ji ověří tlačítkem **Ověřit platbu** (v pokladně i v přehledu prodejů).
+   Takové objednávky se nepočítají do tržby, dokud nejsou ověřené.
+
+Během čekání na terminál nejde dialog platby zavřít ani platbu odeslat znovu.
+Způsob zpracování karty (ruční / terminál) určuje výhradně server.
+
 **Testování bez terminálu:** nastavte `ADYEN_SIMULATE=1` – platba se „schválí"
 bez volání Adyenu, takže lze vyzkoušet celý průběh v pokladně.
 

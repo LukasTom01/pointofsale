@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import type { CardProvider, Order } from "@/lib/types";
+import { useEffect, useMemo, useState } from "react";
+import type { CardProvider, Order, StaffMember } from "@/lib/types";
 import { formatKc, kcToHal } from "@/lib/money";
 import type { CartLine } from "@/components/Pos";
 
@@ -9,25 +9,79 @@ interface Props {
   cart: CartLine[];
   totalHal: number;
   cardProvider: CardProvider;
+  staff: StaffMember[];
   onClose: () => void;
   onPaid: (order: Order) => void;
 }
 
-type Step = "method" | "cash" | "card";
+type Step = "method" | "cash" | "card" | "account";
 
-export default function Checkout({ cart, totalHal, cardProvider, onClose, onPaid }: Props) {
+export default function Checkout({ cart, totalHal, cardProvider, staff, onClose, onPaid }: Props) {
   const [step, setStep] = useState<Step>("method");
   const [cashGiven, setCashGiven] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Platba odešla do terminálu, ale výsledek není jistý – objednávka čeká na ověření.
+  const [pending, setPending] = useState<{ order: Order; message: string } | null>(null);
+  // Během čekání na terminál nebo při nejisté platbě nesmí jít dialog zavřít
+  // ani poslat platbu znovu (hrozilo by dvojí stržení).
+  const locked = busy || pending != null;
+
+  // Varování při zavírání/obnovení stránky, když se čeká na terminál.
+  useEffect(() => {
+    if (!busy) return;
+    const h = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", h);
+    return () => window.removeEventListener("beforeunload", h);
+  }, [busy]);
+
+  function safeClose() {
+    if (!locked) onClose();
+  }
+
+  // Zpracuje odpověď z /api/orders i /api/orders/[id]/verify.
+  async function handleResponse(res: Response) {
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 202 && data.pending) {
+      setPending({ order: data.order as Order, message: data.error ?? "Výsledek platby není známý." });
+      return;
+    }
+    if (!res.ok) throw new Error(data.error ?? "Nepodařilo se uložit objednávku.");
+    setPending(null);
+    onPaid(data as Order);
+  }
+
+  async function verify() {
+    if (!pending) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/orders/${pending.order.id}/verify`, { method: "POST" });
+      if (res.status === 400) {
+        // Platba byla zamítnuta – lze zkusit znovu.
+        const data = await res.json().catch(() => ({}));
+        setPending(null);
+        setError(data.error ?? "Platba neproběhla.");
+        return;
+      }
+      await handleResponse(res);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ověření se nepodařilo.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const cashGivenHal = useMemo(() => kcToHal(cashGiven), [cashGiven]);
   const changeHal = cashGivenHal != null ? cashGivenHal - totalHal : null;
 
   async function submit(payload: {
-    paymentMethod: "cash" | "card";
+    paymentMethod: "cash" | "card" | "account";
     cashGivenHal?: number | null;
-    cardProvider?: CardProvider;
+    accountStaffId?: string;
   }) {
     setBusy(true);
     setError(null);
@@ -40,11 +94,13 @@ export default function Checkout({ cart, totalHal, cardProvider, onClose, onPaid
           ...payload,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Nepodařilo se uložit objednávku.");
-      onPaid(data as Order);
+      await handleResponse(res);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Neznámá chyba.");
+      setError(
+        e instanceof Error && e.message !== "Failed to fetch"
+          ? e.message
+          : "Spojení se serverem se přerušilo. Než platbu zopakujete, zkontrolujte terminál a přehled prodejů.",
+      );
     } finally {
       setBusy(false);
     }
@@ -64,7 +120,7 @@ export default function Checkout({ cart, totalHal, cardProvider, onClose, onPaid
   }, [totalHal]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 sm:items-center" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 sm:items-center" onClick={safeClose}>
       <div
         className="flex max-h-[92vh] w-full max-w-md flex-col rounded-t-3xl bg-white shadow-xl sm:rounded-3xl"
         onClick={(e) => e.stopPropagation()}
@@ -74,7 +130,11 @@ export default function Checkout({ cart, totalHal, cardProvider, onClose, onPaid
             <p className="text-sm text-slate-500">K úhradě</p>
             <p className="text-2xl font-extrabold text-slate-900">{formatKc(totalHal)}</p>
           </div>
-          <button onClick={onClose} className="rounded-lg px-2 py-1 text-2xl text-slate-400 hover:text-slate-600">
+          <button
+            onClick={safeClose}
+            disabled={locked}
+            className="rounded-lg px-2 py-1 text-2xl text-slate-400 hover:text-slate-600 disabled:opacity-30"
+          >
             ✕
           </button>
         </div>
@@ -88,7 +148,7 @@ export default function Checkout({ cart, totalHal, cardProvider, onClose, onPaid
             <div className="grid gap-3">
               <button
                 onClick={() => setStep("cash")}
-                className="tap-active flex items-center gap-4 rounded-2xl border-2 border-slate-200 p-5 text-left hover:border-emerald-400"
+                className="tap-active flex items-center gap-4 rounded-2xl border-2 border-slate-200 p-4 text-left hover:border-emerald-400"
               >
                 <span className="text-4xl">💵</span>
                 <span>
@@ -98,7 +158,7 @@ export default function Checkout({ cart, totalHal, cardProvider, onClose, onPaid
               </button>
               <button
                 onClick={() => setStep("card")}
-                className="tap-active flex items-center gap-4 rounded-2xl border-2 border-slate-200 p-5 text-left hover:border-emerald-400"
+                className="tap-active flex items-center gap-4 rounded-2xl border-2 border-slate-200 p-4 text-left hover:border-emerald-400"
               >
                 <span className="text-4xl">💳</span>
                 <span>
@@ -110,7 +170,26 @@ export default function Checkout({ cart, totalHal, cardProvider, onClose, onPaid
                   </span>
                 </span>
               </button>
+              <button
+                onClick={() => setStep("account")}
+                className="tap-active flex items-center gap-4 rounded-2xl border-2 border-slate-200 p-4 text-left hover:border-violet-400"
+              >
+                <span className="text-4xl">👤</span>
+                <span>
+                  <span className="block text-lg font-bold text-slate-900">Na účet</span>
+                  <span className="text-sm text-slate-500">Zdarma pro zaměstnance – jen se zaeviduje</span>
+                </span>
+              </button>
             </div>
+          )}
+
+          {step === "account" && (
+            <AccountStep
+              staff={staff}
+              totalHal={totalHal}
+              busy={busy}
+              onConfirm={(staffId) => submit({ paymentMethod: "account", accountStaffId: staffId })}
+            />
           )}
 
           {step === "cash" && (
@@ -168,17 +247,27 @@ export default function Checkout({ cart, totalHal, cardProvider, onClose, onPaid
             </div>
           )}
 
-          {step === "card" && (
+          {step === "card" && pending && (
+            <PendingStep
+              order={pending.order}
+              message={pending.message}
+              busy={busy}
+              onVerify={verify}
+              onLater={onClose}
+            />
+          )}
+
+          {step === "card" && !pending && (
             <CardStep
               provider={cardProvider}
               totalHal={totalHal}
               busy={busy}
-              onConfirm={() => submit({ paymentMethod: "card", cardProvider })}
+              onConfirm={() => submit({ paymentMethod: "card" })}
             />
           )}
         </div>
 
-        {step !== "method" && (
+        {step !== "method" && !locked && (
           <div className="border-t border-slate-200 p-4">
             <button
               onClick={() => {
@@ -192,6 +281,108 @@ export default function Checkout({ cart, totalHal, cardProvider, onClose, onPaid
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function AccountStep({
+  staff,
+  totalHal,
+  busy,
+  onConfirm,
+}: {
+  staff: StaffMember[];
+  totalHal: number;
+  busy: boolean;
+  onConfirm: (staffId: string) => void;
+}) {
+  const [selected, setSelected] = useState<string | null>(null);
+  const person = staff.find((s) => s.id === selected);
+
+  if (staff.length === 0) {
+    return (
+      <div className="rounded-2xl bg-slate-50 p-5 text-center text-slate-600">
+        <p className="text-3xl">👤</p>
+        <p className="mt-2 font-semibold">Zatím tu nikdo není.</p>
+        <p className="mt-1 text-sm">
+          Lidi, kterým lze zapisovat na účet, přidáte v{" "}
+          <a href="/admin/lide" className="font-semibold text-violet-700 underline">
+            administraci → Lidé
+          </a>
+          .
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <p className="mb-3 text-sm text-slate-600">Kdo si objednávku bere?</p>
+      <div className="grid grid-cols-2 gap-2">
+        {staff.map((s) => (
+          <button
+            key={s.id}
+            onClick={() => setSelected(s.id)}
+            className={`tap-active truncate rounded-xl border-2 px-3 py-3 text-left font-semibold ${
+              selected === s.id
+                ? "border-violet-500 bg-violet-50 text-violet-800"
+                : "border-slate-200 text-slate-800 hover:border-violet-300"
+            }`}
+          >
+            👤 {s.name}
+          </button>
+        ))}
+      </div>
+      <button
+        disabled={busy || !person}
+        onClick={() => person && onConfirm(person.id)}
+        className="tap-active mt-4 w-full rounded-2xl bg-violet-600 py-4 text-lg font-bold text-white disabled:bg-slate-300"
+      >
+        {busy ? "Ukládám…" : person ? `Zapsat na účet: ${person.name}` : "Vyberte osobu"}
+      </button>
+      <p className="mt-2 text-center text-xs text-slate-400">
+        Hodnota {formatKc(totalHal)} se zaeviduje, ale nepočítá se do tržby.
+      </p>
+    </div>
+  );
+}
+
+function PendingStep({
+  order,
+  message,
+  busy,
+  onVerify,
+  onLater,
+}: {
+  order: Order;
+  message: string;
+  busy: boolean;
+  onVerify: () => void;
+  onLater: () => void;
+}) {
+  return (
+    <div className="text-center">
+      <div className="mb-4 rounded-2xl bg-amber-50 p-5 text-amber-900">
+        <p className="text-3xl">⚠️</p>
+        <p className="mt-1 font-bold">Nevíme jistě, jestli platba proběhla</p>
+        <p className="mt-2 text-sm">{message}</p>
+        <p className="mt-2 text-xs text-amber-700">Účtenka #{order.number} čeká na ověření.</p>
+      </div>
+      <button
+        disabled={busy}
+        onClick={onVerify}
+        className="tap-active w-full rounded-2xl bg-emerald-600 py-4 text-lg font-bold text-white disabled:bg-slate-300"
+      >
+        {busy ? "Ověřuji…" : "Ověřit platbu"}
+      </button>
+      <button
+        disabled={busy}
+        onClick={onLater}
+        className="mt-3 w-full rounded-xl py-2 text-sm font-medium text-slate-500 hover:text-slate-800 disabled:opacity-50"
+      >
+        Zavřít – ověřím později v přehledu prodejů
+      </button>
+      <p className="mt-2 text-xs text-slate-400">Platbu neopakujte, dokud není ověřeno, že neproběhla.</p>
     </div>
   );
 }

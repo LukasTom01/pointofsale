@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { listOrders, listProducts } from "@/lib/store";
 import { formatKc } from "@/lib/money";
+import { isSale } from "@/lib/reports";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,7 @@ export default async function AdminHome() {
     listProducts(),
     listOrders({ from, to }),
   ]);
-  const paid = todayOrders.filter((o) => o.paymentStatus === "paid");
+  const paid = todayOrders.filter(isSale);
   const total = paid.reduce((s, o) => s + o.totalHal, 0);
 
   return (
@@ -28,7 +29,7 @@ export default async function AdminHome() {
         <Stat label="Produktů" value={String(products.length)} />
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid gap-3 sm:grid-cols-3">
         <Link
           href="/admin/produkty"
           className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm hover:border-slate-300"
@@ -44,6 +45,14 @@ export default async function AdminHome() {
           <p className="text-2xl">📊</p>
           <p className="mt-2 text-lg font-bold text-slate-900">Přehled prodejů</p>
           <p className="text-sm text-slate-500">Denní tržby a seznam účtenek.</p>
+        </Link>
+        <Link
+          href="/admin/lide"
+          className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm hover:border-slate-300"
+        >
+          <p className="text-2xl">👤</p>
+          <p className="mt-2 text-lg font-bold text-slate-900">Lidé na účet</p>
+          <p className="text-sm text-slate-500">Zaměstnanci a brigádníci, kteří berou zdarma.</p>
         </Link>
       </div>
     </div>
