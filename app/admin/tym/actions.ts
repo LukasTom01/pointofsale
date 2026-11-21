@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/adminServer";
 import { getStaff, listStaff } from "@/lib/store";
 import { teamStore } from "@/lib/team/store";
+import { saveUploads } from "@/lib/team/attachments";
 import {
   copyTargets,
   doneAtFor,
@@ -30,6 +31,14 @@ async function validStaffIds(ids: string[]): Promise<string[]> {
   const known = new Set((await listStaff()).map((s) => s.id));
   return [...new Set(ids)].filter((id) => known.has(id));
 }
+/** Termín z formuláře: den + volitelný čas (čas bez dne se ignoruje). */
+function parseDue(fd: FormData): { dueDate: string | null; dueTime: number | null } {
+  const day = text(fd, "dueDate");
+  if (!isDay(day)) return { dueDate: null, dueTime: null };
+  const time = text(fd, "dueTime");
+  return { dueDate: day, dueTime: time ? parseTime(time) : null };
+}
+
 async function validEventId(id: string): Promise<string | null> {
   if (!id) return null;
   return (await teamStore.listEvents()).some((e) => e.id === id) ? id : null;
@@ -45,15 +54,16 @@ export async function createTask(_prev: FormState, fd: FormData): Promise<FormSt
   await requireAdmin();
   const title = text(fd, "title", 200);
   if (!title) return { error: "Zadejte název úkolu." };
-  const due = text(fd, "dueDate");
-  await teamStore.createTask({
+  const task = await teamStore.createTask({
     title,
     note: text(fd, "note", 4000) || null,
-    dueDate: isDay(due) ? due : null,
+    ...parseDue(fd),
     eventId: await validEventId(text(fd, "eventId")),
     assigneeIds: await validStaffIds(fd.getAll("assignee").map(String)),
   });
+  const uploadError = await saveUploads(task.id, fd);
   refresh();
+  if (uploadError) return { error: `Úkol přidán, ale přílohy ne: ${uploadError}` };
   return { ok: "Úkol přidán." };
 }
 
@@ -65,18 +75,19 @@ export async function updateTask(_prev: FormState, fd: FormData): Promise<FormSt
   if (!title) return { error: "Zadejte název úkolu." };
   const statusRaw = text(fd, "status");
   const status = isTaskStatus(statusRaw) ? statusRaw : task.status;
-  const due = text(fd, "dueDate");
   await teamStore.updateTask({
     ...task,
     title,
     note: text(fd, "note", 4000) || null,
     status,
     doneAt: doneAtFor(status, task.doneAt, new Date().toISOString()),
-    dueDate: isDay(due) ? due : null,
+    ...parseDue(fd),
     eventId: await validEventId(text(fd, "eventId")),
     assigneeIds: await validStaffIds(fd.getAll("assignee").map(String)),
   });
+  const uploadError = await saveUploads(task.id, fd);
   refresh();
+  if (uploadError) return { error: `Uloženo, ale přílohy ne: ${uploadError}` };
   return { ok: "Uloženo." };
 }
 
@@ -95,6 +106,13 @@ export async function deleteTask(_prev: FormState, fd: FormData): Promise<FormSt
   await teamStore.deleteTask(text(fd, "taskId"));
   refresh();
   return { ok: "Úkol smazán." };
+}
+
+export async function deleteAttachment(_prev: FormState, fd: FormData): Promise<FormState> {
+  await requireAdmin();
+  await teamStore.deleteAttachment(text(fd, "attachmentId"));
+  refresh();
+  return { ok: "Příloha smazána." };
 }
 
 // --- Akce a pozice -----------------------------------------------------------

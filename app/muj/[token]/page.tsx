@@ -2,8 +2,9 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getStaff } from "@/lib/store";
 import { teamStore } from "@/lib/team/store";
-import { addDays, canCheckIn, canCheckOut, compareTasks, formatRange, isOverdue, pragueClock, pragueToday } from "@/lib/team/domain";
-import { dayLabel, dayLong, dayShort } from "@/lib/team/format";
+import { addDays, canCheckIn, canCheckOut, compareTasks, formatRange, isOverdue, pragueClock, pragueNow } from "@/lib/team/domain";
+import { dayLabel, dayLong, dueText } from "@/lib/team/format";
+import { sizeText } from "@/lib/team/attachments";
 import { checkIn, checkOut, toggleMyTask } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -27,12 +28,14 @@ export default async function MyPage({ params }: Props) {
   const person = profile ? await getStaff(profile.staffId) : null;
   if (!profile || !person) notFound();
 
-  const today = pragueToday();
-  const [shifts, tasks, roles, events] = await Promise.all([
+  const now = pragueNow();
+  const today = now.day;
+  const [shifts, tasks, roles, events, attachments] = await Promise.all([
     teamStore.listShifts({ from: today, to: addDays(today, 13), staffId: person.id }),
     teamStore.listTasks(),
     teamStore.listRoles(),
     teamStore.listEvents(),
+    teamStore.listAttachments(),
   ]);
   const roleName = new Map(roles.map((r) => [r.id, r.name]));
   const eventName = new Map(events.map((e) => [e.id, e.name]));
@@ -123,7 +126,8 @@ export default async function MyPage({ params }: Props) {
             <ul className="divide-y divide-slate-100 rounded-xl bg-white shadow-sm">
               {[...open, ...doneRecently].map((t) => {
                 const isDone = t.status === "done";
-                const overdue = isOverdue(t, today);
+                const overdue = isOverdue(t, now);
+                const files = isDone ? [] : attachments.filter((a) => a.taskId === t.id);
                 return (
                   <li key={t.id} className="flex items-start gap-3 px-4 py-3">
                     <form action={toggleMyTask}>
@@ -142,11 +146,29 @@ export default async function MyPage({ params }: Props) {
                       <p className={isDone ? "text-slate-400 line-through" : "font-medium"}>{t.title}</p>
                       {t.dueDate ? (
                         <p className={`text-xs ${overdue ? "font-semibold text-red-600" : "text-slate-500"}`}>
-                          {overdue ? "Po termínu · " : "Do "}
-                          {dayShort(t.dueDate)}
+                          {overdue ? "Po termínu · " : "Termín: "}
+                          {dueText(t.dueDate, t.dueTime, today)}
                         </p>
                       ) : null}
                       {t.note && !isDone ? <p className="text-sm whitespace-pre-line text-slate-600">{t.note}</p> : null}
+                      {files.length ? (
+                        <ul className="mt-1 space-y-1">
+                          {files.map((f) => (
+                            <li key={f.id}>
+                              <a
+                                href={`/muj/${encodeURIComponent(token)}/priloha/${f.id}`}
+                                target="_blank"
+                                rel="noopener"
+                                className="inline-flex max-w-full items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-sm"
+                              >
+                                <span>📎</span>
+                                <span className="truncate">{f.name}</span>
+                                <span className="shrink-0 text-xs text-slate-400">{sizeText(f.size)}</span>
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
                     </div>
                   </li>
                 );

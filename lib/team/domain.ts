@@ -12,12 +12,31 @@ export const isDay = (value: string): boolean => DAY_RE.test(value);
 export const TASK_STATUSES: TaskStatus[] = ["todo", "doing", "done"];
 export const isTaskStatus = (v: string): v is TaskStatus => (TASK_STATUSES as string[]).includes(v);
 
-/** Otevřený úkol po termínu (dnešek je ještě v termínu). */
-export function isOverdue(task: Pick<Task, "status" | "dueDate">, today: string): boolean {
-  return task.status !== "done" && task.dueDate != null && task.dueDate < today;
+/** „Teď“ v české zóně: den a minuta dne. */
+export interface Now {
+  day: string;
+  min: number;
 }
 
-/** Pořadí: otevřené dřív než hotové; otevřené podle termínu (bez termínu na konec), hotové od nejnovějších. */
+type DueFields = Pick<Task, "status" | "dueDate" | "dueTime">;
+
+/**
+ * Otevřený úkol po termínu. Bez času je celý den termínu ještě v pořádku;
+ * s časem je po termínu od té minuty.
+ */
+export function isOverdue(task: DueFields, now: Now): boolean {
+  if (task.status === "done" || task.dueDate == null) return false;
+  if (task.dueDate < now.day) return true;
+  return task.dueDate === now.day && task.dueTime != null && task.dueTime <= now.min;
+}
+
+/** Otevřený úkol, jehož termín přijde během `days` dní (dnes až dnes+days), a ještě není po termínu. */
+export function isDueSoon(task: DueFields, now: Now, days = 3): boolean {
+  if (task.status === "done" || task.dueDate == null || isOverdue(task, now)) return false;
+  return task.dueDate <= addDays(now.day, days);
+}
+
+/** Pořadí: otevřené dřív než hotové; otevřené podle termínu a času (bez termínu/času na konec), hotové od nejnovějších. */
 export function compareTasks(a: Task, b: Task): number {
   const doneA = a.status === "done";
   const doneB = b.status === "done";
@@ -28,6 +47,9 @@ export function compareTasks(a: Task, b: Task): number {
     if (!b.dueDate) return -1;
     return a.dueDate < b.dueDate ? -1 : 1;
   }
+  const timeA = a.dueTime ?? 24 * 60;
+  const timeB = b.dueTime ?? 24 * 60;
+  if (timeA !== timeB) return timeA - timeB;
   return b.createdAt.localeCompare(a.createdAt);
 }
 
@@ -162,6 +184,16 @@ export function copyTargets(source: { staffId: string; day: string }, staffIds: 
 /** Dnešek v české zóně, "YYYY-MM-DD". */
 export function pragueToday(now = new Date()): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+}
+
+/** Aktuální den a minuta dne v české zóně. */
+export function pragueNow(now = new Date()): Now {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+      .formatToParts(now)
+      .map((x) => [x.type, x.value]),
+  );
+  return { day: pragueToday(now), min: Number(p.hour) * 60 + Number(p.minute) };
 }
 
 /** Skutečný okamžik pro český čas `minutes` v den `day` (bezpečné přes změnu času). */

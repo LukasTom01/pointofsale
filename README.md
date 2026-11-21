@@ -116,8 +116,16 @@ Bez `ADMIN_PASSWORD` je vše otevřené jako dřív.
 
 Jednoduchý interní nástroj nad seznamem **Lidé** (stejní lidé jako u „na účet“).
 
-- **Úkoly** – rychlé přidání (název, termín, kdo, akce), zaškrtnutí hotovo,
-  filtry (otevřené / kdo / akce / po termínu).
+- **Úkoly** – rychlé přidání (název, termín **den + volitelně čas**, kdo – i víc
+  lidí najednou, akce, **přílohy**), zaškrtnutí hotovo, filtry (otevřené / kdo /
+  akce / po termínu / termín do 3 dnů).
+  - **Přehled** nahoře v Úkolech i na úvodní stránce administrace: otevřené úkoly
+    **po termínu** a úkoly s **termínem do 3 dnů**. Úkol s časem je po termínu od
+    té minuty, bez času až další den.
+  - **Přílohy** (fotky, PDF, dokumenty) – max 4 MB najednou, max 10 na úkol.
+    Fotky z mobilu se před odesláním samy zmenší. Ukládají se do databáze (Neon),
+    nic dalšího se nastavovat nemusí. Pracovník je uvidí u svého úkolu přes osobní
+    odkaz.
 - **Směny** – ruční plán lidé × dny (týden, nebo dny vybrané akce): „+“ přidá
   směnu, klik ji upraví / smaže / zkopíruje na další dny a lidi; nejčastější
   časy jako rychlá tlačítka; pozice s barvou; varování při překryvu; obsazení

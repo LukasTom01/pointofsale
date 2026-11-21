@@ -1,5 +1,8 @@
 import Link from "next/link";
-import { listOrders, listProducts } from "@/lib/store";
+import { listOrders, listProducts, listStaff } from "@/lib/store";
+import { teamStore } from "@/lib/team/store";
+import { pragueNow } from "@/lib/team/domain";
+import TaskDashboard from "@/components/team/TaskDashboard";
 import { formatKc } from "@/lib/money";
 import { isSale } from "@/lib/reports";
 
@@ -14,10 +17,13 @@ export default async function AdminHome() {
   const day = todayStr();
   const from = new Date(`${day}T00:00:00`);
   const to = new Date(from.getTime() + 24 * 60 * 60 * 1000);
-  const [products, todayOrders] = await Promise.all([
+  const [products, todayOrders, staff, tasks] = await Promise.all([
     listProducts(),
     listOrders({ from, to }),
+    listStaff(),
+    teamStore.listTasks(),
   ]);
+  const nameById = new Map(staff.map((s) => [s.id, s.name]));
   const paid = todayOrders.filter(isSale);
   const total = paid.reduce((s, o) => s + o.totalHal, 0);
 
@@ -27,6 +33,16 @@ export default async function AdminHome() {
         <Stat label="Tržba dnes" value={formatKc(total)} />
         <Stat label="Prodejů dnes" value={String(paid.length)} />
         <Stat label="Produktů" value={String(products.length)} />
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-lg font-bold">Úkoly</h2>
+          <Link href="/admin/ukoly" className="text-sm text-slate-600 hover:underline">
+            Všechny úkoly →
+          </Link>
+        </div>
+        <TaskDashboard tasks={tasks} nameById={nameById} now={pragueNow()} />
       </div>
 
       <div className="grid gap-3 sm:grid-cols-3">
