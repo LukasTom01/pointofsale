@@ -2,7 +2,7 @@
 // Strategie: pro navigaci network-first (aby data byla čerstvá), s fallbackem
 // na cache když je zařízení offline; statické assety cache-first.
 
-const CACHE = "pos-v2";
+const CACHE = "pos-v3";
 const APP_SHELL = ["/", "/manifest.webmanifest", "/icon.svg", "/icon-192.png", "/icon-512.png"];
 
 self.addEventListener("install", (event) => {
@@ -28,6 +28,9 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   // API požadavky vždy ze sítě (bez cache) – jde o data prodeje.
   if (url.pathname.startsWith("/api/")) return;
+  // Data stránek Next.js (RSC) a administrace/osobní přehled vždy čerstvé ze sítě.
+  if (url.searchParams.has("_rsc") || request.headers.get("RSC") === "1") return;
+  if (url.pathname.startsWith("/admin") || url.pathname.startsWith("/muj") || url.pathname.startsWith("/prihlaseni")) return;
 
   if (request.mode === "navigate") {
     event.respondWith(
