@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import type { StaffMember } from "@/lib/types";
 
 // Správa lidí, kterým lze v pokladně zapsat objednávku „na účet“.
@@ -9,12 +10,14 @@ export default function StaffAdmin({ initialStaff }: { initialStaff: StaffMember
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const router = useRouter();
 
   async function call(url: string, init: RequestInit) {
     setError(null);
     const res = await fetch(url, { headers: { "Content-Type": "application/json" }, ...init });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error ?? "Akce se nepodařila.");
+    router.refresh(); // obnoví i sekci kontaktů a odkazů pod seznamem
     return data;
   }
 

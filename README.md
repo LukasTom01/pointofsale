@@ -18,6 +18,8 @@ Brigádník naklikáním sestaví objednávku, aplikace **zaeviduje prodej** a n
   - Správa **produktů** a **kategorií** (přidání, úprava, skrytí, smazání).
   - **Přehled prodejů** – denní tržba, počet účtenek, rozpad hotovost/karta,
     seznam účtenek s položkami.
+- **Tým (`/admin/ukoly`, `/admin/smeny`, `/admin/dochazka`, `/admin/akce`)** –
+  interní nástroj pro brigádníky, viz [Tým: úkoly, směny a docházka](#tým-úkoly-směny-a-docházka).
 - **PWA** – lze „nainstalovat" na plochu telefonu/tabletu, funguje i v terminálu
   prohlížeče; základní offline cache.
 
@@ -103,12 +105,43 @@ bez volání Adyenu, takže lze vyzkoušet celý průběh v pokladně.
 Přidání dalšího poskytovatele (SumUp / Viva / …) = přidání další větve ve stejné
 abstrakci; zbytek aplikace se nemění.
 
+## Zamčení administrace
+
+Nastavte proměnnou `ADMIN_PASSWORD`. Administrace (`/admin`), výpisy prodejů,
+export a změny katalogu/lidí pak vyžadují přihlášení na `/prihlaseni` (cookie
+platí 60 dní, „Odhlásit“ v liště). Pokladna (`/`) zůstává otevřená.
+Bez `ADMIN_PASSWORD` je vše otevřené jako dřív.
+
+## Tým: úkoly, směny a docházka
+
+Jednoduchý interní nástroj nad seznamem **Lidé** (stejní lidé jako u „na účet“).
+
+- **Úkoly** – rychlé přidání (název, termín, kdo, akce), zaškrtnutí hotovo,
+  filtry (otevřené / kdo / akce / po termínu).
+- **Směny** – ruční plán lidé × dny (týden, nebo dny vybrané akce): „+“ přidá
+  směnu, klik ji upraví / smaže / zkopíruje na další dny a lidi; nejčastější
+  časy jako rychlá tlačítka; pozice s barvou; varování při překryvu; obsazení
+  po hodinách.
+- **Docházka** – denní pohled po pozicích: Přišel/a / Nepřišel/a, oprava
+  příchodu a odchodu. **Souhrn hodin** za období/akci a **výkaz do Excelu**
+  (list Souhrn + list pro každého). Žádné mzdy – jen hodiny.
+- **Akce** (nepovinné) – seskupí úkoly a směny (festival, trh…) a **Pozice**.
+- **Osobní odkaz** (`/muj/<token>`) – v Lidé → „Vytvořit odkaz“, poslat
+  člověku (WhatsApp/SMS). Bez registrace uvidí své směny na 14 dní, dnes
+  tlačítka **Jsem tady / Odcházím** a své úkoly k odškrtnutí. Lze přidat na
+  plochu (vlastní manifest). „Nový odkaz“ starý zneplatní, „Zrušit“ ho vypne.
+
+Data jsou v tabulkách `team_*` (Postgres, vytvoří se samy) nebo v
+`data/team.json`. Časy jsou v české zóně. Testy doménové logiky: `npm test`.
+
 ## Struktura
 
 ```
 app/                 stránky a API (App Router)
   page.tsx           pokladna (POS)
-  admin/             administrace (produkty, prodeje)
+  admin/             administrace (produkty, prodeje, lidé, úkoly, směny, docházka, akce)
+  muj/[token]/       osobní přehled pracovníka (směny, příchod/odchod, úkoly)
+  prihlaseni/        přihlášení do administrace (ADMIN_PASSWORD)
   api/               REST endpointy (products, categories, orders, config)
 components/           klientské komponenty (POS, Checkout, ProductsAdmin, …)
 lib/
@@ -118,6 +151,8 @@ lib/
   payments.ts        abstrakce platby kartou
   adyen.ts           Adyen Terminal API klient
   money.ts           formátování/parsování Kč
+  adminAuth.ts       admin heslo (cookie, chráněné cesty pro middleware)
+  team/              modul Tým: typy, doménová logika + testy, úložiště, výkaz
 scripts/seed.ts      ukázková data
 public/              manifest, service worker, ikona (PWA)
 ```

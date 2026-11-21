@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { deleteStaff, updateStaff } from "@/lib/store";
+import { teamStore } from "@/lib/team/store";
 
 export const dynamic = "force-dynamic";
 
@@ -23,5 +24,7 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
   const { id } = await params;
   const ok = await deleteStaff(id);
   if (!ok) return NextResponse.json({ error: "Nenalezeno." }, { status: 404 });
+  // Modul Tým: směny, kontakt a osobní odkaz člověka zmizí, úkoly zůstanou bez něj.
+  await teamStore.forgetStaff(id);
   return NextResponse.json({ ok: true });
 }
