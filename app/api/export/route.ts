@@ -21,7 +21,7 @@ function toCsv(rows: string[][]): string {
 }
 
 function ordersCsv(orders: Order[]): string {
-  const header = ["Číslo", "Datum", "Čas", "Platba", "Stav", "Celkem", "Přijato", "Vráceno", "Položky"];
+  const header = ["Číslo", "Datum", "Čas", "Platba", "Na účet", "Stav", "Celkem", "Přijato", "Vráceno", "Položky"];
   const rows = orders.map((o) => {
     const d = new Date(o.createdAt);
     const datum = d.toLocaleDateString("cs-CZ");
@@ -33,7 +33,8 @@ function ordersCsv(orders: Order[]): string {
       String(o.number),
       datum,
       cas,
-      o.paymentMethod === "cash" ? "Hotovost" : "Karta",
+      o.paymentMethod === "cash" ? "Hotovost" : o.paymentMethod === "card" ? "Karta" : "Na účet",
+      o.accountName ?? "",
       o.paymentStatus,
       money(o.totalHal),
       prijato,

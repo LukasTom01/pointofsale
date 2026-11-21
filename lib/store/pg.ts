@@ -6,7 +6,7 @@
 
 import { neon } from "@neondatabase/serverless";
 import crypto from "node:crypto";
-import type { Category, Order, OrderItem, Product } from "../types";
+import type { Category, Order, OrderItem, Product, StaffMember } from "../types";
 import type { NewOrderData, OrderPaymentPatch } from "./shared";
 
 function db() {
@@ -68,6 +68,16 @@ export function ensureSchema(): Promise<void> {
     // Doplňkové sloupce pro dohledání stavu platby na terminálu (migrace).
     await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS card_service_id TEXT`;
     await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_message TEXT`;
+    // Objednávky „na účet“ (zaměstnanci/brigádníci).
+    await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS account_staff_id TEXT`;
+    await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS account_name TEXT`;
+    await sql`CREATE TABLE IF NOT EXISTS staff (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      sort_order INT NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    )`;
     await sql`CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_id)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_items_order ON order_items(order_id)`;
@@ -122,6 +132,8 @@ function toOrder(r: Row, items: OrderItem[]): Order {
     cardServiceId: (r.card_service_id as string) ?? null,
     paymentMessage: (r.payment_message as string) ?? null,
     cashGivenHal: r.cash_given_hal != null ? Number(r.cash_given_hal) : null,
+    accountStaffId: (r.account_staff_id as string) ?? null,
+    accountName: (r.account_name as string) ?? null,
     staffName: (r.staff_name as string) ?? null,
     note: (r.note as string) ?? null,
     items,
@@ -265,10 +277,12 @@ export async function createOrder(data: NewOrderData): Promise<Order> {
     const createdAt = nowIso();
     const inserted = (await sql`INSERT INTO orders
       (id, total_hal, payment_method, payment_status, card_provider, card_ref,
-       card_service_id, payment_message, cash_given_hal, staff_name, note, created_at)
+       card_service_id, payment_message, cash_given_hal, account_staff_id, account_name,
+       staff_name, note, created_at)
       VALUES (${orderId}, ${data.totalHal}, ${data.paymentMethod}, ${data.paymentStatus},
         ${data.cardProvider ?? null}, ${data.cardRef ?? null}, ${data.cardServiceId ?? null},
         ${data.paymentMessage ?? null}, ${data.cashGivenHal ?? null},
+        ${data.accountStaffId ?? null}, ${data.accountName ?? null},
         ${data.staffName ?? null}, ${data.note ?? null}, ${createdAt})
       RETURNING number`) as Row[];
 
@@ -290,6 +304,8 @@ export async function createOrder(data: NewOrderData): Promise<Order> {
       cardServiceId: data.cardServiceId ?? null,
       paymentMessage: data.paymentMessage ?? null,
       cashGivenHal: data.cashGivenHal ?? null,
+      accountStaffId: data.accountStaffId ?? null,
+      accountName: data.accountName ?? null,
       staffName: data.staffName ?? null,
       note: data.note ?? null,
       items: data.items,
@@ -364,8 +380,73 @@ export async function listOrders(opts?: {
   });
 }
 
+// --- Lidé „na účet“ ---
+
+function toStaff(r: Row): StaffMember {
+  return {
+    id: r.id as string,
+    name: r.name as string,
+    active: Boolean(r.active),
+    sortOrder: Number(r.sort_order),
+    createdAt: r.created_at as string,
+  };
+}
+
+export async function listStaff(opts?: { activeOnly?: boolean }): Promise<StaffMember[]> {
+  return q(async (sql) => {
+    const rows = (opts?.activeOnly
+      ? await sql`SELECT * FROM staff WHERE active = TRUE ORDER BY sort_order, name`
+      : await sql`SELECT * FROM staff ORDER BY sort_order, name`) as Row[];
+    return rows.map(toStaff);
+  });
+}
+
+export async function getStaff(staffId: string): Promise<StaffMember | null> {
+  return q(async (sql) => {
+    const rows = (await sql`SELECT * FROM staff WHERE id = ${staffId}`) as Row[];
+    return rows[0] ? toStaff(rows[0]) : null;
+  });
+}
+
+export async function createStaff(input: {
+  name: string;
+  active?: boolean;
+  sortOrder?: number;
+}): Promise<StaffMember> {
+  return q(async (sql) => {
+    const sortOrder =
+      input.sortOrder ??
+      Number(((await sql`SELECT COALESCE(MAX(sort_order) + 1, 0) AS n FROM staff`) as Row[])[0].n);
+    const rows = (await sql`INSERT INTO staff (id, name, active, sort_order, created_at)
+      VALUES (${id()}, ${input.name}, ${input.active ?? true}, ${sortOrder}, ${nowIso()})
+      RETURNING *`) as Row[];
+    return toStaff(rows[0]);
+  });
+}
+
+export async function updateStaff(
+  staffId: string,
+  patch: Partial<Pick<StaffMember, "name" | "active" | "sortOrder">>,
+): Promise<StaffMember | null> {
+  return q(async (sql) => {
+    const rows = (await sql`UPDATE staff SET
+      name = COALESCE(${patch.name ?? null}, name),
+      active = COALESCE(${patch.active ?? null}, active),
+      sort_order = COALESCE(${patch.sortOrder ?? null}, sort_order)
+      WHERE id = ${staffId} RETURNING *`) as Row[];
+    return rows[0] ? toStaff(rows[0]) : null;
+  });
+}
+
+export async function deleteStaff(staffId: string): Promise<boolean> {
+  return q(async (sql) => {
+    const rows = (await sql`DELETE FROM staff WHERE id = ${staffId} RETURNING id`) as Row[];
+    return rows.length > 0;
+  });
+}
+
 export async function resetAll(): Promise<void> {
   await q(async (sql) => {
-    await sql`TRUNCATE order_items, orders, products, categories RESTART IDENTITY CASCADE`;
+    await sql`TRUNCATE order_items, orders, products, categories, staff RESTART IDENTITY CASCADE`;
   });
 }

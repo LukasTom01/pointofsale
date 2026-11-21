@@ -2,7 +2,7 @@
 // produktů – klientovi se nevěří.
 
 import type { CreateOrderInput, Order, OrderItem } from "./types";
-import { createOrder, getOrder, getProduct, updateOrderPayment } from "./store";
+import { createOrder, getOrder, getProduct, getStaff, updateOrderPayment } from "./store";
 import { activeCardProvider, chargeViaAdyen, verifyAdyenPayment, type CardChargeResult } from "./payments";
 import { newServiceId } from "./adyen";
 
@@ -22,7 +22,7 @@ export async function placeOrder(input: CreateOrderInput): Promise<Order> {
   if (!input.items || input.items.length === 0) {
     throw new OrderError("Objednávka je prázdná.");
   }
-  if (input.paymentMethod !== "cash" && input.paymentMethod !== "card") {
+  if (input.paymentMethod !== "cash" && input.paymentMethod !== "card" && input.paymentMethod !== "account") {
     throw new OrderError("Neplatný způsob platby.");
   }
 
@@ -45,6 +45,23 @@ export async function placeOrder(input: CreateOrderInput): Promise<Order> {
       lineHal,
     });
     totalHal += lineHal;
+  }
+
+  // Na účet: zboží zdarma pro zaměstnance/brigádníka – eviduje se hodnota a osoba.
+  if (input.paymentMethod === "account") {
+    if (!input.accountStaffId) throw new OrderError("Vyberte, komu se objednávka zapisuje na účet.");
+    const person = await getStaff(input.accountStaffId);
+    if (!person || !person.active) throw new OrderError("Vybraná osoba neexistuje nebo není aktivní.");
+    return createOrder({
+      totalHal,
+      paymentMethod: "account",
+      paymentStatus: "paid",
+      accountStaffId: person.id,
+      accountName: person.name,
+      staffName: input.staffName ?? null,
+      note: input.note ?? null,
+      items,
+    });
   }
 
   // Platba.
