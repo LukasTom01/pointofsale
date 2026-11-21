@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { listOrders } from "@/lib/store";
 import { placeOrder, OrderError, PaymentPendingError } from "@/lib/orders";
 import type { CreateOrderInput } from "@/lib/types";
+import { tickSoon } from "@/lib/team/notify";
 
 export const dynamic = "force-dynamic";
 // Platba kartou na terminálu (Adyen) může běžet déle – necháme routě víc času.
@@ -28,6 +29,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  tickSoon(); // připomínky úkolů i bez cronu (max 1× za minutu)
   const body = (await request.json().catch(() => null)) as CreateOrderInput | null;
   if (!body) {
     return NextResponse.json({ error: "Neplatné tělo požadavku." }, { status: 400 });

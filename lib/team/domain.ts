@@ -1,5 +1,5 @@
 // Čistá doménová logika modulu Tým (bez úložiště) – testy v domain.test.ts.
-import type { Attendance, Task, TaskStatus } from "./types";
+import type { Attendance, ChecklistItem, NewTask, RoleTask, Task, TaskStatus } from "./types";
 
 const TZ = process.env.REPORT_TZ || "Europe/Prague";
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -9,7 +9,7 @@ export const isDay = (value: string): boolean => DAY_RE.test(value);
 
 // --- Úkoly -------------------------------------------------------------------
 
-export const TASK_STATUSES: TaskStatus[] = ["todo", "doing", "done"];
+export const TASK_STATUSES: TaskStatus[] = ["todo", "doing", "review", "done"];
 export const isTaskStatus = (v: string): v is TaskStatus => (TASK_STATUSES as string[]).includes(v);
 
 /** „Teď“ v české zóně: den a minuta dne. */
@@ -25,14 +25,14 @@ type DueFields = Pick<Task, "status" | "dueDate" | "dueTime">;
  * s časem je po termínu od té minuty.
  */
 export function isOverdue(task: DueFields, now: Now): boolean {
-  if (task.status === "done" || task.dueDate == null) return false;
+  if (task.status === "done" || task.status === "review" || task.dueDate == null) return false;
   if (task.dueDate < now.day) return true;
   return task.dueDate === now.day && task.dueTime != null && task.dueTime <= now.min;
 }
 
 /** Otevřený úkol, jehož termín přijde během `days` dní (dnes až dnes+days), a ještě není po termínu. */
 export function isDueSoon(task: DueFields, now: Now, days = 3): boolean {
-  if (task.status === "done" || task.dueDate == null || isOverdue(task, now)) return false;
+  if (task.status === "done" || task.status === "review" || task.dueDate == null || isOverdue(task, now)) return false;
   return task.dueDate <= addDays(now.day, days);
 }
 
@@ -57,6 +57,196 @@ export function compareTasks(a: Task, b: Task): number {
 export function doneAtFor(status: TaskStatus, previous: string | null, nowIso: string): string | null {
   if (status !== "done") return null;
   return previous ?? nowIso;
+}
+
+const uid = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`).slice(0, 36);
+
+/** Úkol se všemi poli – výchozí hodnoty pro nová pole. */
+export function withTaskDefaults(input: NewTask): Omit<Task, "id" | "createdAt" | "updatedAt"> {
+  return {
+    status: "todo",
+    completion: "each",
+    doneBy: [],
+    requiresPhoto: false,
+    requiresReview: false,
+    remindMin: null,
+    checklist: [],
+    problem: null,
+    adminNote: null,
+    shiftId: null,
+    templateId: null,
+    doneAt: null,
+    ...input,
+  };
+}
+
+/** Kdo z přiřazených už má hotovo. */
+const doneAssignees = (task: Pick<Task, "assigneeIds" | "doneBy">) =>
+  task.assigneeIds.filter((id) => task.doneBy.includes(id));
+
+/** Má tenhle člověk svou část hotovou? */
+export function isDoneFor(task: Task, staffId: string): boolean {
+  if (task.status === "done") return true;
+  if (task.completion === "any") return task.status === "review";
+  return task.doneBy.includes(staffId);
+}
+
+/** „2/3“ u úkolu, kde to musí udělat každý; jinak null. */
+export function progressText(task: Task): string | null {
+  if (task.completion !== "each" || task.assigneeIds.length < 2) return null;
+  return `${doneAssignees(task).length}/${task.assigneeIds.length}`;
+}
+
+/** Konečný stav po splnění: s kontrolou čeká na vedoucího. */
+const finished = (task: Task, nowIso: string): Task => ({
+  ...task,
+  status: task.requiresReview ? "review" : "done",
+  doneAt: task.requiresReview ? null : (task.doneAt ?? nowIso),
+  adminNote: null,
+});
+
+/** Brigádník odškrtl svou část. */
+export function completeFor(task: Task, staffId: string, nowIso: string): Task {
+  if (task.status === "done" || task.status === "review") return task;
+  if (task.completion === "any") return finished({ ...task, doneBy: [staffId] }, nowIso);
+  const next = { ...task, doneBy: [...new Set([...task.doneBy, staffId])] };
+  const all = task.assigneeIds.length > 0 && task.assigneeIds.every((id) => next.doneBy.includes(id));
+  return all ? finished(next, nowIso) : { ...next, status: "doing" };
+}
+
+/** Brigádník vrátil své odškrtnutí. Schválený úkol (s kontrolou) už vrátit nejde. */
+export function uncompleteFor(task: Task, staffId: string): Task {
+  if (task.status === "done" && task.requiresReview) return task;
+  const doneBy = task.completion === "any" ? [] : task.doneBy.filter((id) => id !== staffId);
+  const partial = task.completion === "each" && task.assigneeIds.some((id) => doneBy.includes(id));
+  return { ...task, doneBy, status: partial ? "doing" : "todo", doneAt: null };
+}
+
+/** Vedoucí odškrtl / znovu otevřel úkol za všechny. */
+export function adminToggle(task: Task, nowIso: string): Task {
+  if (task.status === "done") return { ...task, status: "todo", doneBy: [], doneAt: null };
+  return { ...task, status: "done", doneAt: nowIso, problem: null };
+}
+
+export const approveTask = (task: Task, nowIso: string): Task => ({ ...task, status: "done", doneAt: nowIso, adminNote: null });
+
+/** Vrácení z kontroly: všichni znovu, s komentářem vedoucího. */
+export const returnTask = (task: Task, note: string | null): Task => ({
+  ...task,
+  status: "todo",
+  doneBy: [],
+  doneAt: null,
+  adminNote: note,
+});
+
+/** Kdy poslat připomínku: X minut před časem termínu; bez času v 8:00 v den termínu. */
+export function reminderAt(task: Pick<Task, "dueDate" | "dueTime" | "remindMin">): Date | null {
+  if (task.remindMin == null || !task.dueDate) return null;
+  if (task.dueTime == null) return pragueInstant(task.dueDate, 8 * 60);
+  return pragueInstant(task.dueDate, task.dueTime - task.remindMin);
+}
+
+/** Okamžik termínu (bez času = konec dne). */
+export function dueInstant(task: Pick<Task, "dueDate" | "dueTime">): Date | null {
+  if (!task.dueDate) return null;
+  return pragueInstant(task.dueDate, task.dueTime ?? 24 * 60);
+}
+
+/** Checklist z textu (co řádek, to položka); zachová odškrtnutí položek se stejným textem. */
+export function parseChecklist(text: string, existing: ChecklistItem[] = []): ChecklistItem[] {
+  const pool = existing.slice();
+  return text
+    .split(/\r?\n/)
+    .map((l) => l.replace(/^\s*(?:[-*•]|\[[ xX]?\])\s*/, "").trim().slice(0, 200))
+    .filter(Boolean)
+    .slice(0, 50)
+    .map((line) => {
+      const i = pool.findIndex((p) => p.text === line);
+      if (i >= 0) return pool.splice(i, 1)[0];
+      return { id: uid(), text: line, doneBy: null, doneAt: null };
+    });
+}
+
+export const checklistText = (items: ChecklistItem[]): string => items.map((i) => i.text).join("\n");
+
+export function toggleChecklistItem(task: Task, itemId: string, by: string, nowIso: string): Task {
+  return {
+    ...task,
+    checklist: task.checklist.map((i) =>
+      i.id !== itemId ? i : i.doneAt ? { ...i, doneBy: null, doneAt: null } : { ...i, doneBy: by, doneAt: nowIso },
+    ),
+  };
+}
+
+/**
+ * Kopie úkolů na jiný den: první (nejdřívější) termín výběru padne na `targetDay`,
+ * ostatní si drží rozestup ve dnech. Úkoly bez termínu dostanou `targetDay`.
+ */
+export function copyDueDates(tasks: Pick<Task, "id" | "dueDate">[], targetDay: string | null): Map<string, string | null> {
+  const out = new Map<string, string | null>();
+  if (!targetDay) {
+    for (const t of tasks) out.set(t.id, t.dueDate);
+    return out;
+  }
+  const dated = tasks.map((t) => t.dueDate).filter((d): d is string => Boolean(d)).sort();
+  const base = dated[0] ?? null;
+  for (const t of tasks) {
+    if (!t.dueDate || !base) out.set(t.id, targetDay);
+    else out.set(t.id, addDays(targetDay, dayDiff(base, t.dueDate)));
+  }
+  return out;
+}
+
+export function dayDiff(from: string, to: string): number {
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000);
+}
+
+/** Termín úkolu pozice ve směně (minuty dne, ořezané na den). */
+export function roleTaskDueMin(t: Pick<RoleTask, "anchor" | "offsetMin">, shift: { startMin: number; endMin: number }): number {
+  const base = t.anchor === "end" ? shift.endMin : shift.startMin;
+  return Math.min(24 * 60 - 1, Math.max(0, base + t.offsetMin));
+}
+
+export interface StaffTaskStats {
+  staffId: string;
+  open: number;
+  overdue: number;
+  review: number;
+  problems: number;
+  done: number;
+  /** Hotové úkoly s termínem, kolik z nich včas. */
+  onTime: number;
+  withDue: number;
+}
+
+/** Přehled po lidech: kolik má kdo otevřeno, po termínu, hotovo (a kolik včas). */
+export function staffTaskStats(tasks: Task[], staffIds: string[], now: Now): Map<string, StaffTaskStats> {
+  const out = new Map<string, StaffTaskStats>(
+    staffIds.map((id) => [id, { staffId: id, open: 0, overdue: 0, review: 0, problems: 0, done: 0, onTime: 0, withDue: 0 }]),
+  );
+  for (const t of tasks) {
+    for (const id of t.assigneeIds) {
+      const row = out.get(id);
+      if (!row) continue;
+      if (t.problem?.staffId === id) row.problems += 1;
+      if (t.status === "review") row.review += 1;
+      const mine = isDoneFor(t, id);
+      if (mine) {
+        row.done += 1;
+        const due = dueInstant(t);
+        if (due) {
+          row.withDue += 1;
+          // Čas splnění: doneAt (uzavření), jinak updatedAt jako přibližný čas odškrtnutí.
+          const at = Date.parse(t.doneAt ?? t.updatedAt);
+          if (at <= due.getTime()) row.onTime += 1;
+        }
+      } else {
+        row.open += 1;
+        if (isOverdue(t, now)) row.overdue += 1;
+      }
+    }
+  }
+  return out;
 }
 
 // --- Časy směn ---------------------------------------------------------------

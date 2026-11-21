@@ -6,17 +6,24 @@ import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/adminServer";
 import { getStaff, listStaff } from "@/lib/store";
 import { teamStore } from "@/lib/team/store";
-import { saveUploads } from "@/lib/team/attachments";
+import { copyAttachments, saveUploads } from "@/lib/team/attachments";
 import {
+  adminToggle,
+  approveTask as approve,
+  copyDueDates,
   copyTargets,
   doneAtFor,
   isDay,
   isTaskStatus,
+  parseChecklist,
   parseShiftTimes,
   parseTime,
   pragueInstant,
+  returnTask as giveBack,
 } from "@/lib/team/domain";
-import type { Attendance } from "@/lib/team/types";
+import { notifyAssigned, notifyResolved, notifyReturned } from "@/lib/team/notify";
+import { syncRoleTasks } from "@/lib/team/role-tasks";
+import type { Attendance, Task, TaskLogKind } from "@/lib/team/types";
 
 export type FormState = { ok?: string; error?: string } | undefined;
 
@@ -50,6 +57,23 @@ async function validRoleId(id: string): Promise<string | null> {
 
 // --- Úkoly -------------------------------------------------------------------
 
+const nowIso = () => new Date().toISOString();
+const log = (taskId: string, kind: TaskLogKind, text: string | null = null) =>
+  teamStore.addTaskLog({ taskId, staffId: null, kind, text }).catch(() => undefined);
+
+/** Volby úkolu z formuláře (fotka, kontrola, připomínka, způsob splnění, checklist). */
+function parseOptions(fd: FormData, existing?: Task) {
+  const remindRaw = text(fd, "remindMin");
+  const remind = remindRaw === "" ? null : Number(remindRaw);
+  return {
+    completion: text(fd, "completion") === "any" ? ("any" as const) : ("each" as const),
+    requiresPhoto: fd.get("requiresPhoto") === "1",
+    requiresReview: fd.get("requiresReview") === "1",
+    remindMin: remind != null && Number.isFinite(remind) && remind >= 0 && remind <= 24 * 60 ? remind : null,
+    checklist: parseChecklist(text(fd, "checklist", 8000), existing?.checklist),
+  };
+}
+
 export async function createTask(_prev: FormState, fd: FormData): Promise<FormState> {
   await requireAdmin();
   const title = text(fd, "title", 200);
@@ -60,8 +84,11 @@ export async function createTask(_prev: FormState, fd: FormData): Promise<FormSt
     ...parseDue(fd),
     eventId: await validEventId(text(fd, "eventId")),
     assigneeIds: await validStaffIds(fd.getAll("assignee").map(String)),
+    ...parseOptions(fd),
   });
+  await log(task.id, "created");
   const uploadError = await saveUploads(task.id, fd);
+  await notifyAssigned([task], task.assigneeIds);
   refresh();
   if (uploadError) return { error: `Úkol přidán, ale přílohy ne: ${uploadError}` };
   return { ok: "Úkol přidán." };
@@ -75,30 +102,76 @@ export async function updateTask(_prev: FormState, fd: FormData): Promise<FormSt
   if (!title) return { error: "Zadejte název úkolu." };
   const statusRaw = text(fd, "status");
   const status = isTaskStatus(statusRaw) ? statusRaw : task.status;
-  await teamStore.updateTask({
+  const assigneeIds = await validStaffIds(fd.getAll("assignee").map(String));
+  const next = await teamStore.updateTask({
     ...task,
     title,
     note: text(fd, "note", 4000) || null,
     status,
-    doneAt: doneAtFor(status, task.doneAt, new Date().toISOString()),
+    doneAt: doneAtFor(status, task.doneAt, nowIso()),
+    doneBy: status === "todo" ? [] : task.doneBy.filter((id) => assigneeIds.includes(id)),
     ...parseDue(fd),
     eventId: await validEventId(text(fd, "eventId")),
-    assigneeIds: await validStaffIds(fd.getAll("assignee").map(String)),
+    assigneeIds,
+    ...parseOptions(fd, task),
   });
+  await log(task.id, "edited");
   const uploadError = await saveUploads(task.id, fd);
+  const added = assigneeIds.filter((id) => !task.assigneeIds.includes(id));
+  if (next && added.length) await notifyAssigned([next], added);
   refresh();
   if (uploadError) return { error: `Uloženo, ale přílohy ne: ${uploadError}` };
   return { ok: "Uloženo." };
 }
 
-/** Zaškrtnutí hotovo / vrácení ze seznamu. */
+/** Zaškrtnutí hotovo / vrácení ze seznamu (za všechny). */
 export async function toggleTaskDone(fd: FormData) {
   await requireAdmin();
   const task = await teamStore.getTask(text(fd, "taskId"));
   if (!task) return;
-  const status = task.status === "done" ? "todo" : "done";
-  await teamStore.updateTask({ ...task, status, doneAt: doneAtFor(status, task.doneAt, new Date().toISOString()) });
+  const next = adminToggle(task, nowIso());
+  await teamStore.updateTask(next);
+  await log(task.id, next.status === "done" ? "done" : "undone");
   refresh();
+}
+
+/** Kontrola: schválit. */
+export async function approveTask(fd: FormData) {
+  await requireAdmin();
+  const task = await teamStore.getTask(text(fd, "taskId"));
+  if (!task || task.status !== "review") return;
+  await teamStore.updateTask(approve(task, nowIso()));
+  await log(task.id, "approved");
+  refresh();
+}
+
+/** Kontrola: vrátit k dopracování s komentářem (přijde jim notifikace). */
+export async function returnTask(_prev: FormState, fd: FormData): Promise<FormState> {
+  await requireAdmin();
+  const task = await teamStore.getTask(text(fd, "taskId"));
+  if (!task) return { error: "Úkol nenalezen." };
+  const note = text(fd, "adminNote", 500) || null;
+  const next = giveBack(task, note);
+  await teamStore.updateTask(next);
+  await log(task.id, "returned", note);
+  await notifyReturned(next, note);
+  refresh();
+  return { ok: "Vráceno." };
+}
+
+/** Problém vyřešen (volitelná odpověď přijde brigádníkovi). */
+export async function resolveProblem(_prev: FormState, fd: FormData): Promise<FormState> {
+  await requireAdmin();
+  const task = await teamStore.getTask(text(fd, "taskId"));
+  if (!task?.problem) return { error: "Problém už je vyřešený." };
+  const note = text(fd, "adminNote", 500) || null;
+  const reporter = task.problem.staffId;
+  const next = { ...task, problem: null, adminNote: note ?? task.adminNote };
+  await teamStore.updateTask(next);
+  await log(task.id, "resolved", note);
+  await notifyResolved(next, reporter, note);
+  refresh();
+  return { ok: "Vyřešeno." };
 }
 
 export async function deleteTask(_prev: FormState, fd: FormData): Promise<FormState> {
@@ -113,6 +186,101 @@ export async function deleteAttachment(_prev: FormState, fd: FormData): Promise<
   await teamStore.deleteAttachment(text(fd, "attachmentId"));
   refresh();
   return { ok: "Příloha smazána." };
+}
+
+/**
+ * Hromadné akce s vybranými úkoly: kopie (na jiný den, jiným lidem) nebo smazání.
+ * Při kopii se první termín výběru posune na zvolený den, ostatní drží rozestup.
+ */
+export async function bulkTasks(_prev: FormState, fd: FormData): Promise<FormState> {
+  await requireAdmin();
+  const ids = [...new Set(fd.getAll("sel").map(String))];
+  const all = await teamStore.listTasks();
+  const chosen = all.filter((t) => ids.includes(t.id));
+  if (chosen.length === 0) return { error: "Nejdřív zaškrtněte úkoly v seznamu (políčko vlevo)." };
+
+  if (text(fd, "op") === "delete") {
+    for (const t of chosen) await teamStore.deleteTask(t.id);
+    refresh();
+    return { ok: `Smazáno ${chosen.length} úkolů.` };
+  }
+
+  const day = text(fd, "copyDay");
+  const dates = copyDueDates(chosen, isDay(day) ? day : null);
+  const people = await validStaffIds(fd.getAll("copyAssignee").map(String));
+  const eventRaw = text(fd, "copyEvent");
+  const eventId = eventRaw === "keep" ? undefined : await validEventId(eventRaw);
+  const created: Task[] = [];
+  for (const t of chosen) {
+    const copy = await teamStore.createTask({
+      title: t.title,
+      note: t.note,
+      dueDate: dates.get(t.id) ?? null,
+      dueTime: t.dueTime,
+      eventId: eventId === undefined ? t.eventId : eventId,
+      assigneeIds: people.length ? people : t.assigneeIds,
+      completion: t.completion,
+      requiresPhoto: t.requiresPhoto,
+      requiresReview: t.requiresReview,
+      remindMin: t.remindMin,
+      checklist: parseChecklist(t.checklist.map((i) => i.text).join("\n")),
+    });
+    await copyAttachments(t.id, copy.id);
+    await log(copy.id, "copied", t.title);
+    created.push(copy);
+  }
+  await notifyAssigned(created, [...new Set(created.flatMap((t) => t.assigneeIds))]);
+  refresh();
+  return { ok: `Vytvořeno ${created.length} kopií.` };
+}
+
+// --- Úkoly pozic -------------------------------------------------------------
+
+export async function saveRoleTask(_prev: FormState, fd: FormData): Promise<FormState> {
+  await requireAdmin();
+  const roleId = await validRoleId(text(fd, "roleId"));
+  if (!roleId) return { error: "Vyberte pozici." };
+  const title = text(fd, "title", 200);
+  if (!title) return { error: "Zadejte název úkolu." };
+  const offset = Number(text(fd, "offsetMin") || 0);
+  const opts = parseOptions(fd);
+  await teamStore.saveRoleTask({
+    id: text(fd, "roleTaskId") || undefined,
+    roleId,
+    title,
+    note: text(fd, "note", 4000) || null,
+    checklist: opts.checklist.map((i) => i.text),
+    anchor: text(fd, "anchor") === "end" ? "end" : "start",
+    offsetMin: Number.isFinite(offset) ? Math.max(-720, Math.min(720, Math.round(offset))) : 0,
+    requiresPhoto: opts.requiresPhoto,
+    requiresReview: opts.requiresReview,
+    remindMin: opts.remindMin,
+  });
+  const n = await syncRoleTasks();
+  refresh();
+  return { ok: n ? `Uloženo · upraveno ${n} úkolů ve směnách.` : "Uloženo." };
+}
+
+export async function deleteRoleTask(_prev: FormState, fd: FormData): Promise<FormState> {
+  await requireAdmin();
+  await teamStore.deleteRoleTask(text(fd, "roleTaskId"));
+  await syncRoleTasks();
+  refresh();
+  return { ok: "Smazáno." };
+}
+
+// --- Push notifikace vedoucího -------------------------------------------------
+
+export async function saveAdminPush(sub: { endpoint: string; p256dh: string; auth: string }) {
+  await requireAdmin();
+  if (!sub?.endpoint?.startsWith("https://") || !sub.p256dh || !sub.auth) return;
+  await teamStore.savePushSub({ endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth, staffId: null });
+}
+
+export async function removeAdminPush(endpoint: string) {
+  await requireAdmin();
+  const sub = (await teamStore.listPushSubs()).find((s) => s.endpoint === endpoint);
+  if (sub && sub.staffId == null) await teamStore.deletePushSub(endpoint);
 }
 
 // --- Akce a pozice -----------------------------------------------------------
@@ -155,6 +323,7 @@ export async function saveRole(_prev: FormState, fd: FormData): Promise<FormStat
 export async function deleteRole(fd: FormData) {
   await requireAdmin();
   await teamStore.deleteRole(text(fd, "roleId"));
+  await syncRoleTasks();
   refresh();
 }
 
@@ -183,6 +352,7 @@ export async function saveShift(_prev: FormState, fd: FormData): Promise<FormSta
   } else {
     await teamStore.createShifts([values]);
   }
+  await syncRoleTasks();
   refresh();
   return { ok: "Směna uložena." };
 }
@@ -190,6 +360,7 @@ export async function saveShift(_prev: FormState, fd: FormData): Promise<FormSta
 export async function deleteShift(_prev: FormState, fd: FormData): Promise<FormState> {
   await requireAdmin();
   await teamStore.deleteShift(text(fd, "shiftId"));
+  await syncRoleTasks();
   refresh();
   return { ok: "Směna smazána." };
 }
@@ -213,6 +384,7 @@ export async function copyShift(_prev: FormState, fd: FormData): Promise<FormSta
       note: source.note,
     })),
   );
+  await syncRoleTasks();
   refresh();
   return { ok: `Vytvořeno ${targets.length} kopií.` };
 }

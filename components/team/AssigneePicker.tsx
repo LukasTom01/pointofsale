@@ -2,13 +2,15 @@
 
 import { useState } from "react";
 
-/** Výběr řešitelů (lze více lidí): přepínací štítky se jmény; vybraní se odešlou jako pole `assignee`. */
+/** Výběr řešitelů (lze více lidí): přepínací štítky se jmény; vybraní se odešlou jako pole `name` (výchozí `assignee`). */
 export default function AssigneePicker({
   people,
   defaultSelected = [],
+  name = "assignee",
 }: {
   people: { id: string; name: string }[];
   defaultSelected?: string[];
+  name?: string;
 }) {
   const [selected, setSelected] = useState<string[]>(defaultSelected);
   const toggle = (id: string) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
@@ -32,7 +34,7 @@ export default function AssigneePicker({
       </div>
       <div className="flex flex-wrap gap-1.5">
         {selected.map((id) => (
-          <input key={id} type="hidden" name="assignee" value={id} />
+          <input key={id} type="hidden" name={name} value={id} />
         ))}
         {people.map((p) => {
           const on = selected.includes(p.id);

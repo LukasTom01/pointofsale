@@ -2,7 +2,8 @@
 // Tabulky s prefixem team_; schéma idempotentní a memoizované na proces.
 import { neon } from "@neondatabase/serverless";
 import crypto from "node:crypto";
-import type { NewShift, Shift, ShiftRole, Task, TaskAttachment, TeamEvent, TeamProfile } from "./types";
+import type { NewShift, PushSub, RoleTask, Shift, ShiftRole, Task, TaskAttachment, TaskLogEntry, TeamEvent, TeamProfile } from "./types";
+import { withTaskDefaults } from "./domain";
 import type { TeamStore } from "./store-shared";
 
 type Sql = ReturnType<typeof neon>;
@@ -47,6 +48,52 @@ function ensureSchema(): Promise<void> {
       updated_at TEXT NOT NULL
     )`;
     await sql`ALTER TABLE team_tasks ADD COLUMN IF NOT EXISTS due_time INT`;
+    // Dřívější úkoly uzavíral kdokoli z přiřazených → 'any'.
+    await sql`ALTER TABLE team_tasks ADD COLUMN IF NOT EXISTS completion TEXT NOT NULL DEFAULT 'any'`;
+    await sql`ALTER TABLE team_tasks ADD COLUMN IF NOT EXISTS done_by TEXT NOT NULL DEFAULT '[]'`;
+    await sql`ALTER TABLE team_tasks ADD COLUMN IF NOT EXISTS requires_photo BOOLEAN NOT NULL DEFAULT FALSE`;
+    await sql`ALTER TABLE team_tasks ADD COLUMN IF NOT EXISTS requires_review BOOLEAN NOT NULL DEFAULT FALSE`;
+    await sql`ALTER TABLE team_tasks ADD COLUMN IF NOT EXISTS remind_min INT`;
+    await sql`ALTER TABLE team_tasks ADD COLUMN IF NOT EXISTS checklist TEXT NOT NULL DEFAULT '[]'`;
+    await sql`ALTER TABLE team_tasks ADD COLUMN IF NOT EXISTS problem TEXT`;
+    await sql`ALTER TABLE team_tasks ADD COLUMN IF NOT EXISTS admin_note TEXT`;
+    await sql`ALTER TABLE team_tasks ADD COLUMN IF NOT EXISTS shift_id TEXT`;
+    await sql`ALTER TABLE team_tasks ADD COLUMN IF NOT EXISTS template_id TEXT`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_team_tasks_shift ON team_tasks(shift_id)`;
+    await sql`CREATE TABLE IF NOT EXISTS team_task_log (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      staff_id TEXT,
+      kind TEXT NOT NULL,
+      text TEXT,
+      created_at TEXT NOT NULL
+    )`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_team_task_log_task ON team_task_log(task_id)`;
+    await sql`CREATE TABLE IF NOT EXISTS team_role_tasks (
+      id TEXT PRIMARY KEY,
+      role_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      note TEXT,
+      checklist TEXT NOT NULL DEFAULT '[]',
+      anchor TEXT NOT NULL DEFAULT 'start',
+      offset_min INT NOT NULL DEFAULT 0,
+      requires_photo BOOLEAN NOT NULL DEFAULT FALSE,
+      requires_review BOOLEAN NOT NULL DEFAULT FALSE,
+      remind_min INT,
+      sort_order INT NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    )`;
+    await sql`CREATE TABLE IF NOT EXISTS team_push_subs (
+      endpoint TEXT PRIMARY KEY,
+      staff_id TEXT,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`;
+    await sql`CREATE TABLE IF NOT EXISTS team_notices (
+      key TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL
+    )`;
     await sql`CREATE TABLE IF NOT EXISTS team_attachments (
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL,
@@ -57,6 +104,7 @@ function ensureSchema(): Promise<void> {
       created_at TEXT NOT NULL
     )`;
     await sql`CREATE INDEX IF NOT EXISTS idx_team_attachments_task ON team_attachments(task_id)`;
+    await sql`ALTER TABLE team_attachments ADD COLUMN IF NOT EXISTS staff_id TEXT`;
     await sql`CREATE TABLE IF NOT EXISTS team_roles (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -106,6 +154,14 @@ const toEvent = (r: Row): TeamEvent => ({
   dateTo: str(r.date_to),
   createdAt: String(r.created_at),
 });
+const json = <T>(v: unknown, fallback: T): T => {
+  if (v == null || v === "") return fallback;
+  try {
+    return JSON.parse(String(v)) as T;
+  } catch {
+    return fallback;
+  }
+};
 const toTask = (r: Row): Task => ({
   id: String(r.id),
   title: String(r.title),
@@ -114,7 +170,17 @@ const toTask = (r: Row): Task => ({
   dueDate: str(r.due_date),
   dueTime: r.due_time == null ? null : Number(r.due_time),
   eventId: str(r.event_id),
-  assigneeIds: JSON.parse(String(r.assignee_ids ?? "[]")) as string[],
+  assigneeIds: json<string[]>(r.assignee_ids, []),
+  completion: r.completion === "each" ? "each" : "any",
+  doneBy: json<string[]>(r.done_by, []),
+  requiresPhoto: Boolean(r.requires_photo),
+  requiresReview: Boolean(r.requires_review),
+  remindMin: r.remind_min == null ? null : Number(r.remind_min),
+  checklist: json<Task["checklist"]>(r.checklist, []),
+  problem: json<Task["problem"]>(r.problem, null),
+  adminNote: str(r.admin_note),
+  shiftId: str(r.shift_id),
+  templateId: str(r.template_id),
   doneAt: str(r.done_at),
   createdAt: String(r.created_at),
   updatedAt: String(r.updated_at),
@@ -125,6 +191,36 @@ const toAttachment = (r: Row): TaskAttachment => ({
   name: String(r.name),
   mime: String(r.mime),
   size: Number(r.size),
+  staffId: str(r.staff_id),
+  createdAt: String(r.created_at),
+});
+const toLog = (r: Row): TaskLogEntry => ({
+  id: String(r.id),
+  taskId: String(r.task_id),
+  staffId: str(r.staff_id),
+  kind: r.kind as TaskLogEntry["kind"],
+  text: str(r.text),
+  createdAt: String(r.created_at),
+});
+const toRoleTask = (r: Row): RoleTask => ({
+  id: String(r.id),
+  roleId: String(r.role_id),
+  title: String(r.title),
+  note: str(r.note),
+  checklist: json<string[]>(r.checklist, []),
+  anchor: r.anchor === "end" ? "end" : "start",
+  offsetMin: Number(r.offset_min),
+  requiresPhoto: Boolean(r.requires_photo),
+  requiresReview: Boolean(r.requires_review),
+  remindMin: r.remind_min == null ? null : Number(r.remind_min),
+  sortOrder: Number(r.sort_order),
+  createdAt: String(r.created_at),
+});
+const toSub = (r: Row): PushSub => ({
+  endpoint: String(r.endpoint),
+  staffId: str(r.staff_id),
+  p256dh: String(r.p256dh),
+  auth: String(r.auth),
   createdAt: String(r.created_at),
 });
 const toRole = (r: Row): ShiftRole => ({
@@ -207,10 +303,14 @@ export const pgTeamStore: TeamStore = {
   async createTask(input) {
     return q(async (sql) => {
       const now = nowIso();
+      const t = withTaskDefaults(input);
       const rows = (await sql`INSERT INTO team_tasks
-        (id, title, note, status, due_date, due_time, event_id, assignee_ids, done_at, created_at, updated_at)
-        VALUES (${newId()}, ${input.title}, ${input.note}, 'todo', ${input.dueDate}, ${input.dueTime}, ${input.eventId},
-          ${JSON.stringify(input.assigneeIds)}, NULL, ${now}, ${now}) RETURNING *`) as Row[];
+        (id, title, note, status, due_date, due_time, event_id, assignee_ids, completion, done_by, requires_photo,
+          requires_review, remind_min, checklist, problem, admin_note, shift_id, template_id, done_at, created_at, updated_at)
+        VALUES (${newId()}, ${t.title}, ${t.note}, ${t.status}, ${t.dueDate}, ${t.dueTime}, ${t.eventId},
+          ${JSON.stringify(t.assigneeIds)}, ${t.completion}, ${JSON.stringify(t.doneBy)}, ${t.requiresPhoto},
+          ${t.requiresReview}, ${t.remindMin}, ${JSON.stringify(t.checklist)}, ${t.problem ? JSON.stringify(t.problem) : null},
+          ${t.adminNote}, ${t.shiftId}, ${t.templateId}, ${t.doneAt}, ${now}, ${now}) RETURNING *`) as Row[];
       return toTask(rows[0]);
     });
   },
@@ -218,7 +318,12 @@ export const pgTeamStore: TeamStore = {
     return q(async (sql) => {
       const rows = (await sql`UPDATE team_tasks SET title = ${task.title}, note = ${task.note},
         status = ${task.status}, due_date = ${task.dueDate}, due_time = ${task.dueTime}, event_id = ${task.eventId},
-        assignee_ids = ${JSON.stringify(task.assigneeIds)}, done_at = ${task.doneAt}, updated_at = ${nowIso()}
+        assignee_ids = ${JSON.stringify(task.assigneeIds)}, completion = ${task.completion},
+        done_by = ${JSON.stringify(task.doneBy)}, requires_photo = ${task.requiresPhoto},
+        requires_review = ${task.requiresReview}, remind_min = ${task.remindMin},
+        checklist = ${JSON.stringify(task.checklist)}, problem = ${task.problem ? JSON.stringify(task.problem) : null},
+        admin_note = ${task.adminNote}, shift_id = ${task.shiftId}, template_id = ${task.templateId},
+        done_at = ${task.doneAt}, updated_at = ${nowIso()}
         WHERE id = ${task.id} RETURNING *`) as Row[];
       return rows[0] ? toTask(rows[0]) : null;
     });
@@ -226,6 +331,7 @@ export const pgTeamStore: TeamStore = {
   async deleteTask(taskId) {
     await q(async (sql) => {
       await sql`DELETE FROM team_attachments WHERE task_id = ${taskId}`;
+      await sql`DELETE FROM team_task_log WHERE task_id = ${taskId}`;
       await sql`DELETE FROM team_tasks WHERE id = ${taskId}`;
     });
   },
@@ -233,7 +339,7 @@ export const pgTeamStore: TeamStore = {
   // --- Přílohy (obsah jako base64 v TEXT, načítá se jen při stažení) ---
   async listAttachments() {
     return q(async (sql) =>
-      ((await sql`SELECT id, task_id, name, mime, size, created_at FROM team_attachments ORDER BY created_at`) as Row[]).map(
+      ((await sql`SELECT id, task_id, name, mime, size, staff_id, created_at FROM team_attachments ORDER BY created_at`) as Row[]).map(
         toAttachment,
       ),
     );
@@ -246,15 +352,84 @@ export const pgTeamStore: TeamStore = {
   },
   async addAttachment(input, data) {
     return q(async (sql) => {
-      const rows = (await sql`INSERT INTO team_attachments (id, task_id, name, mime, size, data, created_at)
-        VALUES (${newId()}, ${input.taskId}, ${input.name}, ${input.mime}, ${input.size}, ${data.toString("base64")}, ${nowIso()})
-        RETURNING id, task_id, name, mime, size, created_at`) as Row[];
+      const rows = (await sql`INSERT INTO team_attachments (id, task_id, name, mime, size, staff_id, data, created_at)
+        VALUES (${newId()}, ${input.taskId}, ${input.name}, ${input.mime}, ${input.size}, ${input.staffId},
+          ${data.toString("base64")}, ${nowIso()})
+        RETURNING id, task_id, name, mime, size, staff_id, created_at`) as Row[];
       return toAttachment(rows[0]);
     });
   },
   async deleteAttachment(id) {
     await q(async (sql) => {
       await sql`DELETE FROM team_attachments WHERE id = ${id}`;
+    });
+  },
+
+  // --- Historie úkolů ---
+  async listTaskLog(taskId) {
+    return q(async (sql) => {
+      const rows = taskId
+        ? ((await sql`SELECT * FROM team_task_log WHERE task_id = ${taskId} ORDER BY created_at`) as Row[])
+        : ((await sql`SELECT * FROM team_task_log ORDER BY created_at`) as Row[]);
+      return rows.map(toLog);
+    });
+  },
+  async addTaskLog(e) {
+    await q(async (sql) => {
+      await sql`INSERT INTO team_task_log (id, task_id, staff_id, kind, text, created_at)
+        VALUES (${newId()}, ${e.taskId}, ${e.staffId}, ${e.kind}, ${e.text}, ${nowIso()})`;
+    });
+  },
+
+  // --- Úkoly pozic ---
+  async listRoleTasks() {
+    return q(async (sql) => ((await sql`SELECT * FROM team_role_tasks ORDER BY sort_order, created_at`) as Row[]).map(toRoleTask));
+  },
+  async saveRoleTask(input) {
+    return q(async (sql) => {
+      const cl = JSON.stringify(input.checklist);
+      if (input.id) {
+        const rows = (await sql`UPDATE team_role_tasks SET role_id = ${input.roleId}, title = ${input.title}, note = ${input.note},
+          checklist = ${cl}, anchor = ${input.anchor}, offset_min = ${input.offsetMin}, requires_photo = ${input.requiresPhoto},
+          requires_review = ${input.requiresReview}, remind_min = ${input.remindMin}
+          WHERE id = ${input.id} RETURNING *`) as Row[];
+        return rows[0] ? toRoleTask(rows[0]) : null;
+      }
+      const next = Number(((await sql`SELECT COALESCE(MAX(sort_order) + 1, 0) AS n FROM team_role_tasks`) as Row[])[0].n);
+      const rows = (await sql`INSERT INTO team_role_tasks (id, role_id, title, note, checklist, anchor, offset_min,
+          requires_photo, requires_review, remind_min, sort_order, created_at)
+        VALUES (${newId()}, ${input.roleId}, ${input.title}, ${input.note}, ${cl}, ${input.anchor}, ${input.offsetMin},
+          ${input.requiresPhoto}, ${input.requiresReview}, ${input.remindMin}, ${next}, ${nowIso()}) RETURNING *`) as Row[];
+      return toRoleTask(rows[0]);
+    });
+  },
+  async deleteRoleTask(id) {
+    await q(async (sql) => {
+      await sql`DELETE FROM team_role_tasks WHERE id = ${id}`;
+    });
+  },
+
+  // --- Push notifikace ---
+  async listPushSubs() {
+    return q(async (sql) => ((await sql`SELECT * FROM team_push_subs`) as Row[]).map(toSub));
+  },
+  async savePushSub(sub) {
+    await q(async (sql) => {
+      await sql`INSERT INTO team_push_subs (endpoint, staff_id, p256dh, auth, created_at)
+        VALUES (${sub.endpoint}, ${sub.staffId}, ${sub.p256dh}, ${sub.auth}, ${nowIso()})
+        ON CONFLICT (endpoint) DO UPDATE SET staff_id = EXCLUDED.staff_id, p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth`;
+    });
+  },
+  async deletePushSub(endpoint) {
+    await q(async (sql) => {
+      await sql`DELETE FROM team_push_subs WHERE endpoint = ${endpoint}`;
+    });
+  },
+  async claimNotice(key) {
+    return q(async (sql) => {
+      const rows = (await sql`INSERT INTO team_notices (key, created_at) VALUES (${key}, ${nowIso()})
+        ON CONFLICT (key) DO NOTHING RETURNING key`) as Row[];
+      return rows.length > 0;
     });
   },
 
@@ -278,6 +453,7 @@ export const pgTeamStore: TeamStore = {
   async deleteRole(roleId) {
     await q(async (sql) => {
       await sql`UPDATE team_shifts SET role_id = NULL WHERE role_id = ${roleId}`;
+      await sql`DELETE FROM team_role_tasks WHERE role_id = ${roleId}`;
       await sql`DELETE FROM team_roles WHERE id = ${roleId}`;
     });
   },
@@ -334,12 +510,14 @@ export const pgTeamStore: TeamStore = {
     await q(async (sql) => {
       await sql`DELETE FROM team_shifts WHERE staff_id = ${staffId}`;
       await sql`DELETE FROM team_profiles WHERE staff_id = ${staffId}`;
-      const tasks = (await sql`SELECT id, assignee_ids FROM team_tasks`) as Row[];
+      await sql`DELETE FROM team_push_subs WHERE staff_id = ${staffId}`;
+      const tasks = (await sql`SELECT id, assignee_ids, done_by FROM team_tasks`) as Row[];
       for (const t of tasks) {
-        const ids = JSON.parse(String(t.assignee_ids ?? "[]")) as string[];
-        if (ids.includes(staffId)) {
-          const next = JSON.stringify(ids.filter((x) => x !== staffId));
-          await sql`UPDATE team_tasks SET assignee_ids = ${next} WHERE id = ${String(t.id)}`;
+        const ids = json<string[]>(t.assignee_ids, []);
+        const by = json<string[]>(t.done_by, []);
+        if (ids.includes(staffId) || by.includes(staffId)) {
+          await sql`UPDATE team_tasks SET assignee_ids = ${JSON.stringify(ids.filter((x) => x !== staffId))},
+            done_by = ${JSON.stringify(by.filter((x) => x !== staffId))} WHERE id = ${String(t.id)}`;
         }
       }
     });
