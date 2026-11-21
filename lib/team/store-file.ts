@@ -2,7 +2,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import type { Shift, ShiftRole, Task, TeamEvent, TeamProfile } from "./types";
+import type { Shift, ShiftRole, Task, TaskAttachment, TeamEvent, TeamProfile } from "./types";
 import type { TeamStore } from "./store-shared";
 
 interface TeamDb {
@@ -11,11 +11,13 @@ interface TeamDb {
   tasks: Task[];
   roles: ShiftRole[];
   shifts: Shift[];
+  /** Přílohy včetně obsahu v base64 (jen pro lokální vývoj). */
+  attachments: (TaskAttachment & { data: string })[];
 }
 
 const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(process.cwd(), "data");
 const FILE = path.join(DATA_DIR, "team.json");
-const empty = (): TeamDb => ({ profiles: [], events: [], tasks: [], roles: [], shifts: [] });
+const empty = (): TeamDb => ({ profiles: [], events: [], tasks: [], roles: [], shifts: [], attachments: [] });
 
 const g = globalThis as unknown as { __posTeam?: { db: TeamDb | null; chain: Promise<unknown> } };
 const state = (g.__posTeam ??= { db: null, chain: Promise.resolve() });
@@ -24,6 +26,7 @@ async function load(): Promise<TeamDb> {
   if (state.db) return state.db;
   try {
     state.db = { ...empty(), ...(JSON.parse(await fs.readFile(FILE, "utf8")) as Partial<TeamDb>) };
+    for (const t of state.db.tasks) t.dueTime ??= null;
   } catch {
     state.db = empty();
   }
@@ -125,6 +128,29 @@ export const fileTeamStore: TeamStore = {
   async deleteTask(taskId) {
     await mutate((db) => {
       db.tasks = db.tasks.filter((t) => t.id !== taskId);
+      db.attachments = db.attachments.filter((a) => a.taskId !== taskId);
+    });
+  },
+
+  async listAttachments() {
+    return (await load()).attachments.map(({ data: _data, ...meta }) => copy(meta));
+  },
+  async getAttachment(id) {
+    const row = (await load()).attachments.find((a) => a.id === id);
+    if (!row) return null;
+    const { data, ...meta } = row;
+    return { meta: copy(meta), data: Buffer.from(data, "base64") };
+  },
+  async addAttachment(input, data) {
+    return mutate((db) => {
+      const meta: TaskAttachment = { ...input, id: newId(), createdAt: nowIso() };
+      db.attachments.push({ ...meta, data: data.toString("base64") });
+      return copy(meta);
+    });
+  },
+  async deleteAttachment(id) {
+    await mutate((db) => {
+      db.attachments = db.attachments.filter((a) => a.id !== id);
     });
   },
 

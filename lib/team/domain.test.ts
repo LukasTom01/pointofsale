@@ -10,12 +10,14 @@ import {
   coverageByHour,
   doneAtFor,
   formatRange,
+  isDueSoon,
   isOverdue,
   overlappingShiftIds,
   parseShiftTimes,
   parseTime,
   planDays,
   pragueInstant,
+  pragueNow,
   quickTimes,
   reportPeriod,
   toHours,
@@ -23,14 +25,21 @@ import {
 } from "./domain.ts";
 import type { Task } from "./types.ts";
 
-const task = (status: Task["status"], dueDate: string | null, createdAt: string, doneAt: string | null = null): Task => ({
-  id: createdAt, title: "t", note: null, status, dueDate, eventId: null, assigneeIds: [], doneAt, createdAt, updatedAt: createdAt,
+const task = (
+  status: Task["status"],
+  dueDate: string | null,
+  createdAt: string,
+  doneAt: string | null = null,
+  dueTime: number | null = null,
+): Task => ({
+  id: createdAt, title: "t", note: null, status, dueDate, dueTime, eventId: null, assigneeIds: [], doneAt, createdAt, updatedAt: createdAt,
 });
 
 test("tasks: overdue, order, done_at", () => {
-  assert.equal(isOverdue({ status: "todo", dueDate: "2026-11-20" }, "2026-11-21"), true);
-  assert.equal(isOverdue({ status: "todo", dueDate: "2026-11-21" }, "2026-11-21"), false);
-  assert.equal(isOverdue({ status: "done", dueDate: "2026-11-01" }, "2026-11-21"), false);
+  const noon = { day: "2026-11-21", min: 12 * 60 };
+  assert.equal(isOverdue({ status: "todo", dueDate: "2026-11-20", dueTime: null }, noon), true);
+  assert.equal(isOverdue({ status: "todo", dueDate: "2026-11-21", dueTime: null }, noon), false);
+  assert.equal(isOverdue({ status: "done", dueDate: "2026-11-01", dueTime: null }, noon), false);
   const sorted = [
     task("done", "2026-11-01", "1", "50"),
     task("todo", null, "5"),
@@ -100,4 +109,33 @@ test("attendance", () => {
   assert.deepEqual(reportPeriod({}, "2026-11-21", { dateFrom: "2027-06-19", dateTo: "2027-06-20" }), {
     from: "2027-06-19", to: "2027-06-20",
   });
+});
+
+test("tasks: due time, due soon, order by time", () => {
+  const noon = { day: "2026-11-21", min: 12 * 60 };
+  // s časem: po termínu od té minuty
+  assert.equal(isOverdue({ status: "todo", dueDate: "2026-11-21", dueTime: 11 * 60 }, noon), true);
+  assert.equal(isOverdue({ status: "todo", dueDate: "2026-11-21", dueTime: 12 * 60 }, noon), true);
+  assert.equal(isOverdue({ status: "todo", dueDate: "2026-11-21", dueTime: 14 * 60 }, noon), false);
+  // brzy: dnes (ještě v čase) až za 3 dny; ne po termínu, ne hotové, ne bez termínu
+  assert.equal(isDueSoon({ status: "todo", dueDate: "2026-11-21", dueTime: 14 * 60 }, noon), true);
+  assert.equal(isDueSoon({ status: "todo", dueDate: "2026-11-24", dueTime: null }, noon), true);
+  assert.equal(isDueSoon({ status: "todo", dueDate: "2026-11-25", dueTime: null }, noon), false);
+  assert.equal(isDueSoon({ status: "todo", dueDate: "2026-11-21", dueTime: 9 * 60 }, noon), false);
+  assert.equal(isDueSoon({ status: "done", dueDate: "2026-11-22", dueTime: null }, noon), false);
+  assert.equal(isDueSoon({ status: "todo", dueDate: null, dueTime: null }, noon), false);
+  // stejný den: dřívější čas první, bez času na konec dne
+  const order = [
+    task("todo", "2026-11-22", "a"),
+    task("todo", "2026-11-22", "b", null, 15 * 60),
+    task("todo", "2026-11-22", "c", null, 9 * 60),
+  ].sort(compareTasks).map((t) => t.id);
+  assert.deepEqual(order, ["c", "b", "a"]);
+});
+
+test("pragueNow: den a minuta v české zóně", () => {
+  // 21. 11. 2026 23:30 UTC = 22. 11. 0:30 v Praze (zimní čas)
+  assert.deepEqual(pragueNow(new Date("2026-11-21T23:30:00Z")), { day: "2026-11-22", min: 30 });
+  // léto: 1. 7. 10:15 UTC = 12:15 v Praze
+  assert.deepEqual(pragueNow(new Date("2026-07-01T10:15:00Z")), { day: "2026-07-01", min: 12 * 60 + 15 });
 });

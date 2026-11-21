@@ -20,7 +20,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           <Link href="/" className="rounded-lg bg-white/10 px-3 py-1.5 text-sm font-medium hover:bg-white/20">
             ← Pokladna
           </Link>
-          <span className="font-bold">Administrace</span>
+          <Link href="/admin" className="font-bold hover:underline">
+            Administrace
+          </Link>
         </div>
         <nav className="flex flex-wrap items-center gap-1 text-sm">
           {NAV.map((item) => (

@@ -2,7 +2,7 @@
 // Tabulky s prefixem team_; schéma idempotentní a memoizované na proces.
 import { neon } from "@neondatabase/serverless";
 import crypto from "node:crypto";
-import type { NewShift, Shift, ShiftRole, Task, TeamEvent, TeamProfile } from "./types";
+import type { NewShift, Shift, ShiftRole, Task, TaskAttachment, TeamEvent, TeamProfile } from "./types";
 import type { TeamStore } from "./store-shared";
 
 type Sql = ReturnType<typeof neon>;
@@ -46,6 +46,17 @@ function ensureSchema(): Promise<void> {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )`;
+    await sql`ALTER TABLE team_tasks ADD COLUMN IF NOT EXISTS due_time INT`;
+    await sql`CREATE TABLE IF NOT EXISTS team_attachments (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      mime TEXT NOT NULL,
+      size INT NOT NULL,
+      data TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_team_attachments_task ON team_attachments(task_id)`;
     await sql`CREATE TABLE IF NOT EXISTS team_roles (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -101,11 +112,20 @@ const toTask = (r: Row): Task => ({
   note: str(r.note),
   status: r.status as Task["status"],
   dueDate: str(r.due_date),
+  dueTime: r.due_time == null ? null : Number(r.due_time),
   eventId: str(r.event_id),
   assigneeIds: JSON.parse(String(r.assignee_ids ?? "[]")) as string[],
   doneAt: str(r.done_at),
   createdAt: String(r.created_at),
   updatedAt: String(r.updated_at),
+});
+const toAttachment = (r: Row): TaskAttachment => ({
+  id: String(r.id),
+  taskId: String(r.task_id),
+  name: String(r.name),
+  mime: String(r.mime),
+  size: Number(r.size),
+  createdAt: String(r.created_at),
 });
 const toRole = (r: Row): ShiftRole => ({
   id: String(r.id),
@@ -188,8 +208,8 @@ export const pgTeamStore: TeamStore = {
     return q(async (sql) => {
       const now = nowIso();
       const rows = (await sql`INSERT INTO team_tasks
-        (id, title, note, status, due_date, event_id, assignee_ids, done_at, created_at, updated_at)
-        VALUES (${newId()}, ${input.title}, ${input.note}, 'todo', ${input.dueDate}, ${input.eventId},
+        (id, title, note, status, due_date, due_time, event_id, assignee_ids, done_at, created_at, updated_at)
+        VALUES (${newId()}, ${input.title}, ${input.note}, 'todo', ${input.dueDate}, ${input.dueTime}, ${input.eventId},
           ${JSON.stringify(input.assigneeIds)}, NULL, ${now}, ${now}) RETURNING *`) as Row[];
       return toTask(rows[0]);
     });
@@ -197,7 +217,7 @@ export const pgTeamStore: TeamStore = {
   async updateTask(task) {
     return q(async (sql) => {
       const rows = (await sql`UPDATE team_tasks SET title = ${task.title}, note = ${task.note},
-        status = ${task.status}, due_date = ${task.dueDate}, event_id = ${task.eventId},
+        status = ${task.status}, due_date = ${task.dueDate}, due_time = ${task.dueTime}, event_id = ${task.eventId},
         assignee_ids = ${JSON.stringify(task.assigneeIds)}, done_at = ${task.doneAt}, updated_at = ${nowIso()}
         WHERE id = ${task.id} RETURNING *`) as Row[];
       return rows[0] ? toTask(rows[0]) : null;
@@ -205,7 +225,36 @@ export const pgTeamStore: TeamStore = {
   },
   async deleteTask(taskId) {
     await q(async (sql) => {
+      await sql`DELETE FROM team_attachments WHERE task_id = ${taskId}`;
       await sql`DELETE FROM team_tasks WHERE id = ${taskId}`;
+    });
+  },
+
+  // --- Přílohy (obsah jako base64 v TEXT, načítá se jen při stažení) ---
+  async listAttachments() {
+    return q(async (sql) =>
+      ((await sql`SELECT id, task_id, name, mime, size, created_at FROM team_attachments ORDER BY created_at`) as Row[]).map(
+        toAttachment,
+      ),
+    );
+  },
+  async getAttachment(id) {
+    return q(async (sql) => {
+      const rows = (await sql`SELECT * FROM team_attachments WHERE id = ${id}`) as Row[];
+      return rows[0] ? { meta: toAttachment(rows[0]), data: Buffer.from(String(rows[0].data), "base64") } : null;
+    });
+  },
+  async addAttachment(input, data) {
+    return q(async (sql) => {
+      const rows = (await sql`INSERT INTO team_attachments (id, task_id, name, mime, size, data, created_at)
+        VALUES (${newId()}, ${input.taskId}, ${input.name}, ${input.mime}, ${input.size}, ${data.toString("base64")}, ${nowIso()})
+        RETURNING id, task_id, name, mime, size, created_at`) as Row[];
+      return toAttachment(rows[0]);
+    });
+  },
+  async deleteAttachment(id) {
+    await q(async (sql) => {
+      await sql`DELETE FROM team_attachments WHERE id = ${id}`;
     });
   },
 

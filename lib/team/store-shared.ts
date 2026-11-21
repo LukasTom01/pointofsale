@@ -1,4 +1,4 @@
-import type { NewShift, Shift, ShiftRole, Task, TeamEvent, TeamProfile } from "./types";
+import type { NewShift, Shift, ShiftRole, Task, TaskAttachment, TeamEvent, TeamProfile } from "./types";
 
 // Společné rozhraní úložišť modulu Tým (Postgres i soubor).
 export interface TeamStore {
@@ -12,9 +12,16 @@ export interface TeamStore {
 
   listTasks(): Promise<Task[]>;
   getTask(taskId: string): Promise<Task | null>;
-  createTask(input: Pick<Task, "title" | "note" | "dueDate" | "eventId" | "assigneeIds">): Promise<Task>;
+  createTask(input: Pick<Task, "title" | "note" | "dueDate" | "dueTime" | "eventId" | "assigneeIds">): Promise<Task>;
   updateTask(task: Task): Promise<Task | null>;
+  /** Smaže úkol i jeho přílohy. */
   deleteTask(taskId: string): Promise<void>;
+
+  /** Metadata všech příloh (bez obsahu). */
+  listAttachments(): Promise<TaskAttachment[]>;
+  getAttachment(id: string): Promise<{ meta: TaskAttachment; data: Buffer } | null>;
+  addAttachment(input: Omit<TaskAttachment, "id" | "createdAt">, data: Buffer): Promise<TaskAttachment>;
+  deleteAttachment(id: string): Promise<void>;
 
   listRoles(): Promise<ShiftRole[]>;
   saveRole(input: { id?: string; name: string; color: string | null }): Promise<ShiftRole | null>;
