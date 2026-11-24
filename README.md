@@ -126,6 +126,21 @@ Jednoduchý interní nástroj nad seznamem **Lidé** (stejní lidé jako u „na
     Fotky z mobilu se před odesláním samy zmenší. Ukládají se do databáze (Neon),
     nic dalšího se nastavovat nemusí. Pracovník je uvidí u svého úkolu přes osobní
     odkaz.
+  - **Delegování a kontrola**: u úkolu pro víc lidí volba *každý zvlášť* (vidíte
+    „2/3“ a kdo má hotovo) nebo *stačí jeden*; **checklist** (co řádek, to bod);
+    **📷 splnit s fotkou** (brigádník jedním ťuknutím vyfotí a odškrtne);
+    **👀 zkontroluji já** (po odškrtnutí čeká úkol ve stavu *Ke kontrole*,
+    vedoucí ho schválí, nebo vrátí s komentářem).
+  - **Mám problém** – brigádník jedním ťuknutím pošle důvod (chybí materiál,
+    nestihnu…). Vedoucí to vidí nahoře v Úkolech a odpoví / označí vyřešeno.
+  - **Lidé a jejich úkoly** – kolik má kdo otevřeno, po termínu, ke kontrole,
+    hotovo a kolik včas. U každého úkolu **Historie** (kdo co kdy udělal).
+  - **Kopírování** – zaškrtněte úkoly a zkopírujte je na jiný den (drží
+    rozestup dnů), případně jiným lidem. Kopíruje se i checklist a přílohy.
+  - **Úkoly pozic** (`/admin/ukoly/pozice`) – úkoly navázané na pozici
+    (např. Pokladna: „Otevřít pokladnu“ na začátku směny). Každý, kdo má směnu
+    s tou pozicí, je dostane automaticky a uvidí je přímo u dnešní směny.
+  - **Push notifikace** – viz níže.
 - **Směny** – ruční plán lidé × dny (týden, nebo dny vybrané akce): „+“ přidá
   směnu, klik ji upraví / smaže / zkopíruje na další dny a lidi; nejčastější
   časy jako rychlá tlačítka; pozice s barvou; varování při překryvu; obsazení
@@ -138,6 +153,28 @@ Jednoduchý interní nástroj nad seznamem **Lidé** (stejní lidé jako u „na
   člověku (WhatsApp/SMS). Bez registrace uvidí své směny na 14 dní, dnes
   tlačítka **Jsem tady / Odcházím** a své úkoly k odškrtnutí. Lze přidat na
   plochu (vlastní manifest). „Nový odkaz“ starý zneplatní, „Zrušit“ ho vypne.
+
+### Push notifikace
+
+Brigádník si na osobní stránce ťukne **Zapnout upozornění** (na iPhonu jen z
+ikony na ploše – stránka mu ukáže návod „Přidat na plochu“). Vedoucí si je
+zapne nahoře v **Úkolech** (na každém zařízení zvlášť).
+
+Co chodí: **nový úkol**, **připomínka před termínem** (u úkolu volba 15 min až
+4 h předem; úkol bez času v 8:00), **po termínu** (brigádníkovi i vedoucímu),
+**ranní souhrn** (směna + úkoly na dnes), **vrácení z kontroly** a **odpověď na
+problém**. Vedoucímu navíc **problém** a **ke kontrole**.
+
+Nastavení (jednou):
+
+1. `npm run vapid` → do Vercelu (Environment Variables) vložte
+   `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` a `VAPID_SUBJECT` (mailto: váš e-mail).
+2. Nastavte `CRON_SECRET` (libovolný dlouhý text) a na
+   [cron-job.org](https://cron-job.org) (zdarma) nechte **každých 5 minut** volat
+   `https://<váš-web>/api/cron?key=<CRON_SECRET>`. Vercel Cron na tarifu Hobby
+   běží jen 1× denně, proto externí služba. Bez cronu se připomínky kontrolují
+   aspoň při práci s appkou (pokladna, otevření stránek) – max 1× za minutu.
+3. Redeploy. Bez VAPID klíčů appka funguje dál, jen nechodí notifikace.
 
 Data jsou v tabulkách `team_*` (Postgres, vytvoří se samy) nebo v
 `data/team.json`. Časy jsou v české zóně. Testy doménové logiky: `npm test`.

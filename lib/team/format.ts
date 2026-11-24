@@ -38,3 +38,12 @@ export function dueText(dueDate: string, dueTime: number | null, today: string):
             : dayShort(dueDate);
   return dueTime == null ? day : `${day} ${formatTime(dueTime)}`;
 }
+
+/** Termín úkolu pozice: „Na začátku směny“, „30 min po začátku směny“, „1 h před koncem směny“. */
+export function whenText(t: { anchor: "start" | "end"; offsetMin: number }): string {
+  const edge = t.anchor === "end" ? "konci" : "začátku";
+  if (t.offsetMin === 0) return `Na ${edge} směny`;
+  const abs = Math.abs(t.offsetMin);
+  const len = abs % 60 === 0 ? `${abs / 60} h` : abs > 60 ? `${formatTime(abs)} h` : `${abs} min`;
+  return t.offsetMin < 0 ? `${len} před ${t.anchor === "end" ? "koncem" : "začátkem"} směny` : `${len} po ${edge} směny`;
+}

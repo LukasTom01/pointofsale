@@ -2,7 +2,8 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import type { Shift, ShiftRole, Task, TaskAttachment, TeamEvent, TeamProfile } from "./types";
+import type { PushSub, RoleTask, Shift, ShiftRole, Task, TaskAttachment, TaskLogEntry, TeamEvent, TeamProfile } from "./types";
+import { withTaskDefaults } from "./domain";
 import type { TeamStore } from "./store-shared";
 
 interface TeamDb {
@@ -13,11 +14,26 @@ interface TeamDb {
   shifts: Shift[];
   /** Přílohy včetně obsahu v base64 (jen pro lokální vývoj). */
   attachments: (TaskAttachment & { data: string })[];
+  taskLog: TaskLogEntry[];
+  roleTasks: RoleTask[];
+  pushSubs: PushSub[];
+  notices: string[];
 }
 
 const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(process.cwd(), "data");
 const FILE = path.join(DATA_DIR, "team.json");
-const empty = (): TeamDb => ({ profiles: [], events: [], tasks: [], roles: [], shifts: [], attachments: [] });
+const empty = (): TeamDb => ({
+  profiles: [],
+  events: [],
+  tasks: [],
+  roles: [],
+  shifts: [],
+  attachments: [],
+  taskLog: [],
+  roleTasks: [],
+  pushSubs: [],
+  notices: [],
+});
 
 const g = globalThis as unknown as { __posTeam?: { db: TeamDb | null; chain: Promise<unknown> } };
 const state = (g.__posTeam ??= { db: null, chain: Promise.resolve() });
@@ -26,7 +42,14 @@ async function load(): Promise<TeamDb> {
   if (state.db) return state.db;
   try {
     state.db = { ...empty(), ...(JSON.parse(await fs.readFile(FILE, "utf8")) as Partial<TeamDb>) };
-    for (const t of state.db.tasks) t.dueTime ??= null;
+    // Starší úkoly bez nových polí (dřív je uzavíral kdokoli → 'any').
+    state.db.tasks = state.db.tasks.map((t) => ({
+      ...withTaskDefaults({ ...t, completion: t.completion ?? "any", dueTime: t.dueTime ?? null }),
+      id: t.id,
+      createdAt: t.createdAt,
+      updatedAt: t.updatedAt,
+    }));
+    for (const a of state.db.attachments) a.staffId ??= null;
   } catch {
     state.db = empty();
   }
@@ -112,7 +135,7 @@ export const fileTeamStore: TeamStore = {
   async createTask(input) {
     return mutate((db) => {
       const now = nowIso();
-      const task: Task = { id: newId(), status: "todo", doneAt: null, createdAt: now, updatedAt: now, ...input };
+      const task: Task = { ...withTaskDefaults(copy(input)), id: newId(), createdAt: now, updatedAt: now };
       db.tasks.push(task);
       return copy(task);
     });
@@ -129,6 +152,7 @@ export const fileTeamStore: TeamStore = {
     await mutate((db) => {
       db.tasks = db.tasks.filter((t) => t.id !== taskId);
       db.attachments = db.attachments.filter((a) => a.taskId !== taskId);
+      db.taskLog = db.taskLog.filter((e) => e.taskId !== taskId);
     });
   },
 
@@ -151,6 +175,65 @@ export const fileTeamStore: TeamStore = {
   async deleteAttachment(id) {
     await mutate((db) => {
       db.attachments = db.attachments.filter((a) => a.id !== id);
+    });
+  },
+
+  async listTaskLog(taskId) {
+    return copy((await load()).taskLog.filter((e) => !taskId || e.taskId === taskId));
+  },
+  async addTaskLog(e) {
+    await mutate((db) => {
+      db.taskLog.push({ ...copy(e), id: newId(), createdAt: nowIso() });
+    });
+  },
+
+  async listRoleTasks() {
+    return copy((await load()).roleTasks.slice().sort((a, b) => a.sortOrder - b.sortOrder));
+  },
+  async saveRoleTask(input) {
+    return mutate((db) => {
+      if (input.id) {
+        const i = db.roleTasks.findIndex((t) => t.id === input.id);
+        if (i < 0) return null;
+        db.roleTasks[i] = { ...db.roleTasks[i], ...copy(input), id: db.roleTasks[i].id };
+        return copy(db.roleTasks[i]);
+      }
+      const row: RoleTask = {
+        ...copy(input),
+        id: newId(),
+        sortOrder: db.roleTasks.reduce((m, t) => Math.max(m, t.sortOrder + 1), 0),
+        createdAt: nowIso(),
+      };
+      db.roleTasks.push(row);
+      return copy(row);
+    });
+  },
+  async deleteRoleTask(id) {
+    await mutate((db) => {
+      db.roleTasks = db.roleTasks.filter((t) => t.id !== id);
+    });
+  },
+
+  async listPushSubs() {
+    return copy((await load()).pushSubs);
+  },
+  async savePushSub(sub) {
+    await mutate((db) => {
+      db.pushSubs = db.pushSubs.filter((p) => p.endpoint !== sub.endpoint);
+      db.pushSubs.push({ ...copy(sub), createdAt: nowIso() });
+    });
+  },
+  async deletePushSub(endpoint) {
+    await mutate((db) => {
+      db.pushSubs = db.pushSubs.filter((p) => p.endpoint !== endpoint);
+    });
+  },
+  async claimNotice(key) {
+    return mutate((db) => {
+      if (db.notices.includes(key)) return false;
+      db.notices.push(key);
+      if (db.notices.length > 5000) db.notices = db.notices.slice(-4000);
+      return true;
     });
   },
 
@@ -179,6 +262,7 @@ export const fileTeamStore: TeamStore = {
   async deleteRole(roleId) {
     await mutate((db) => {
       db.roles = db.roles.filter((r) => r.id !== roleId);
+      db.roleTasks = db.roleTasks.filter((t) => t.roleId !== roleId);
       for (const s of db.shifts) if (s.roleId === roleId) s.roleId = null;
     });
   },
@@ -224,7 +308,11 @@ export const fileTeamStore: TeamStore = {
     await mutate((db) => {
       db.shifts = db.shifts.filter((s) => s.staffId !== staffId);
       db.profiles = db.profiles.filter((p) => p.staffId !== staffId);
-      for (const t of db.tasks) t.assigneeIds = t.assigneeIds.filter((id) => id !== staffId);
+      db.pushSubs = db.pushSubs.filter((p) => p.staffId !== staffId);
+      for (const t of db.tasks) {
+        t.assigneeIds = t.assigneeIds.filter((id) => id !== staffId);
+        t.doneBy = t.doneBy.filter((id) => id !== staffId);
+      }
     });
   },
 };

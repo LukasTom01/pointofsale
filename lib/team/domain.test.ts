@@ -22,6 +22,20 @@ import {
   reportPeriod,
   toHours,
   weekStart,
+  withTaskDefaults,
+  completeFor,
+  uncompleteFor,
+  adminToggle,
+  approveTask,
+  returnTask,
+  isDoneFor,
+  progressText,
+  reminderAt,
+  parseChecklist,
+  toggleChecklistItem,
+  copyDueDates,
+  roleTaskDueMin,
+  staffTaskStats,
 } from "./domain.ts";
 import type { Task } from "./types.ts";
 
@@ -32,7 +46,8 @@ const task = (
   doneAt: string | null = null,
   dueTime: number | null = null,
 ): Task => ({
-  id: createdAt, title: "t", note: null, status, dueDate, dueTime, eventId: null, assigneeIds: [], doneAt, createdAt, updatedAt: createdAt,
+  ...withTaskDefaults({ title: "t", note: null, dueDate, dueTime, eventId: null, assigneeIds: [] }),
+  id: createdAt, status, doneAt, createdAt, updatedAt: createdAt,
 });
 
 test("tasks: overdue, order, done_at", () => {
@@ -138,4 +153,103 @@ test("pragueNow: den a minuta v české zóně", () => {
   assert.deepEqual(pragueNow(new Date("2026-11-21T23:30:00Z")), { day: "2026-11-22", min: 30 });
   // léto: 1. 7. 10:15 UTC = 12:15 v Praze
   assert.deepEqual(pragueNow(new Date("2026-07-01T10:15:00Z")), { day: "2026-07-01", min: 12 * 60 + 15 });
+});
+
+const team = (over: Partial<Task> = {}): Task => ({
+  ...withTaskDefaults({ title: "t", note: null, dueDate: null, dueTime: null, eventId: null, assigneeIds: ["a", "b"] }),
+  id: "x", createdAt: "c", updatedAt: "c", ...over,
+});
+
+test("completion: each person separately", () => {
+  let t = team();
+  t = completeFor(t, "a", "T1");
+  assert.equal(t.status, "doing");
+  assert.equal(isDoneFor(t, "a"), true);
+  assert.equal(isDoneFor(t, "b"), false);
+  assert.equal(progressText(t), "1/2");
+  t = completeFor(t, "b", "T2");
+  assert.equal(t.status, "done");
+  assert.equal(t.doneAt, "T2");
+  t = uncompleteFor(t, "a");
+  assert.equal(t.status, "doing");
+  assert.deepEqual(t.doneBy, ["b"]);
+  assert.equal(t.doneAt, null);
+});
+
+test("completion: any one closes for all", () => {
+  const t = completeFor(team({ completion: "any" }), "b", "T");
+  assert.equal(t.status, "done");
+  assert.equal(isDoneFor(t, "a"), true);
+  assert.equal(progressText(t), null);
+  assert.equal(uncompleteFor(t, "a").status, "todo");
+});
+
+test("review: done goes to review, approve / return", () => {
+  let t = completeFor(team({ completion: "any", requiresReview: true }), "a", "T");
+  assert.equal(t.status, "review");
+  assert.equal(t.doneAt, null);
+  assert.equal(completeFor(t, "b", "T2"), t);
+  const back = returnTask(t, "Ještě jednou");
+  assert.equal(back.status, "todo");
+  assert.deepEqual(back.doneBy, []);
+  assert.equal(back.adminNote, "Ještě jednou");
+  t = approveTask(t, "T3");
+  assert.equal(t.status, "done");
+  assert.equal(uncompleteFor(t, "a"), t, "schválený úkol brigádník nevrátí");
+  assert.equal(adminToggle(t, "T4").status, "todo");
+  assert.equal(adminToggle(team({ problem: { staffId: "a", reason: "r", at: "x" } }), "T").problem, null);
+});
+
+test("reminders and overdue ignore review", () => {
+  assert.equal(reminderAt({ dueDate: "2026-11-21", dueTime: 600, remindMin: null }), null);
+  assert.equal(reminderAt({ dueDate: "2026-11-21", dueTime: 600, remindMin: 60 })!.toISOString(), "2026-11-21T08:00:00.000Z");
+  assert.equal(reminderAt({ dueDate: "2026-11-21", dueTime: null, remindMin: 60 })!.toISOString(), "2026-11-21T07:00:00.000Z");
+  assert.equal(isOverdue({ status: "review", dueDate: "2026-11-01", dueTime: null }, { day: "2026-11-21", min: 0 }), false);
+});
+
+test("checklist parse keeps done state", () => {
+  const first = parseChecklist("- Kasa\n[ ] Kelímky\n\n  Odpadky ");
+  assert.deepEqual(first.map((i) => i.text), ["Kasa", "Kelímky", "Odpadky"]);
+  const ticked = toggleChecklistItem(team({ checklist: first }), first[1].id, "a", "T").checklist;
+  assert.equal(ticked[1].doneBy, "a");
+  const again = parseChecklist("Kelímky\nNový bod", ticked);
+  assert.equal(again[0].doneAt, "T");
+  assert.equal(again[1].doneAt, null);
+  assert.equal(toggleChecklistItem(team({ checklist: ticked }), first[1].id, "a", "T2").checklist[1].doneAt, null);
+});
+
+test("copy due dates keep day gaps", () => {
+  const m = copyDueDates(
+    [
+      { id: "1", dueDate: "2026-11-20" },
+      { id: "2", dueDate: "2026-11-22" },
+      { id: "3", dueDate: null },
+    ],
+    "2026-12-01",
+  );
+  assert.deepEqual([...m.values()], ["2026-12-01", "2026-12-03", "2026-12-01"]);
+  assert.equal(copyDueDates([{ id: "1", dueDate: "2026-11-20" }], null).get("1"), "2026-11-20");
+});
+
+test("role task due within shift", () => {
+  const shift = { startMin: 600, endMin: 1080 };
+  assert.equal(roleTaskDueMin({ anchor: "start", offsetMin: 0 }, shift), 600);
+  assert.equal(roleTaskDueMin({ anchor: "end", offsetMin: -30 }, shift), 1050);
+  assert.equal(roleTaskDueMin({ anchor: "start", offsetMin: -900 }, shift), 0);
+});
+
+test("stats per person", () => {
+  const now = { day: "2026-11-21", min: 720 };
+  const tasks = [
+    team({ id: "1", dueDate: "2026-11-20" }),
+    team({ id: "2", status: "doing", doneBy: ["a"], dueDate: "2026-11-25", updatedAt: "2026-11-21T10:00:00Z" }),
+    team({ id: "3", status: "review", completion: "any", doneBy: ["b"], problem: { staffId: "b", reason: "x", at: "y" } }),
+  ];
+  const s = staffTaskStats(tasks, ["a", "b"], now);
+  assert.deepEqual(
+    { ...s.get("a") },
+    { staffId: "a", open: 1, overdue: 1, review: 1, problems: 0, done: 2, onTime: 1, withDue: 1 },
+  );
+  assert.equal(s.get("b")!.problems, 1);
+  assert.equal(s.get("b")!.overdue, 1);
 });

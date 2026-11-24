@@ -12,17 +12,25 @@ const INLINE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gi
 const cleanName = (name: string) =>
   name.replace(/[\\/\u0000-\u001f"]/g, "_").trim().slice(0, 150) || "priloha";
 
-/** Uloží soubory z pole `attachment` k úkolu. Vrací chybu, nebo null. */
-export async function saveUploads(taskId: string, fd: FormData): Promise<string | null> {
-  const files = fd.getAll("attachment").filter((f): f is File => f instanceof File && f.size > 0);
+/**
+ * Uloží soubory z pole `field` k úkolu. Vrací chybu, nebo null.
+ * `staffId` = nahrál brigádník (fotka jako důkaz), null = vedoucí.
+ */
+export async function saveUploads(
+  taskId: string,
+  fd: FormData,
+  opts: { staffId?: string | null; field?: string; imagesOnly?: boolean } = {},
+): Promise<string | null> {
+  const files = fd.getAll(opts.field ?? "attachment").filter((f): f is File => f instanceof File && f.size > 0);
   if (files.length === 0) return null;
   const total = files.reduce((s, f) => s + f.size, 0);
   if (total > MAX_UPLOAD_BYTES) return "Přílohy jsou moc velké – najednou lze nahrát max 4 MB.";
   const existing = (await teamStore.listAttachments()).filter((a) => a.taskId === taskId).length;
   if (existing + files.length > MAX_FILES_PER_TASK) return `K úkolu lze přiložit max ${MAX_FILES_PER_TASK} souborů.`;
+  if (opts.imagesOnly && files.some((f) => !f.type.startsWith("image/"))) return "Nahrajte prosím fotku.";
   for (const f of files) {
     await teamStore.addAttachment(
-      { taskId, name: cleanName(f.name), mime: f.type || "application/octet-stream", size: f.size },
+      { taskId, name: cleanName(f.name), mime: f.type || "application/octet-stream", size: f.size, staffId: opts.staffId ?? null },
       Buffer.from(await f.arrayBuffer()),
     );
   }
@@ -44,6 +52,15 @@ export function attachmentResponse(meta: TaskAttachment, data: Buffer, download:
       "Referrer-Policy": "no-referrer",
     },
   });
+}
+
+/** Zkopíruje přílohy vedoucího (ne fotky brigádníků) na jiný úkol. */
+export async function copyAttachments(fromTaskId: string, toTaskId: string) {
+  const metas = (await teamStore.listAttachments()).filter((a) => a.taskId === fromTaskId && a.staffId == null);
+  for (const m of metas) {
+    const file = await teamStore.getAttachment(m.id);
+    if (file) await teamStore.addAttachment({ taskId: toTaskId, name: m.name, mime: m.mime, size: m.size, staffId: null }, file.data);
+  }
 }
 
 export function sizeText(bytes: number): string {

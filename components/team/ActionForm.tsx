@@ -13,12 +13,14 @@ export default function ActionForm({
   className,
   confirm,
   resetOnOk,
+  id,
 }: {
   action: (prev: FormState, fd: FormData) => Promise<FormState>;
   children: ReactNode;
   className?: string;
   confirm?: string;
   resetOnOk?: boolean;
+  id?: string;
 }) {
   const [state, formAction, pending] = useActionState<FormState, FormData>(action, undefined);
   const [generation, setGeneration] = useState(0);
@@ -31,6 +33,7 @@ export default function ActionForm({
   return (
     <form
       key={generation}
+      id={id}
       action={formAction}
       className={className ?? "space-y-2"}
       aria-busy={pending}

@@ -10,7 +10,7 @@ const sizeText = (b: number) =>
   b < 1024 * 1024 ? `${Math.max(1, Math.round(b / 1024))} kB` : `${(Math.round((b / 1024 / 1024) * 10) / 10).toLocaleString("cs-CZ")} MB`;
 
 /** Fotku z mobilu zmenší na max 1920 px (JPEG); když se nepovede nebo nepomůže, nechá originál. */
-async function shrink(file: File): Promise<File> {
+export async function shrink(file: File): Promise<File> {
   if (!SHRINKABLE.has(file.type) || file.size < 400 * 1024) return file;
   try {
     const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
