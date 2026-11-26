@@ -179,6 +179,42 @@ Nastavení (jednou):
 Data jsou v tabulkách `team_*` (Postgres, vytvoří se samy) nebo v
 `data/team.json`. Časy jsou v české zóně. Testy doménové logiky: `npm test`.
 
+## Finance: jednoduché účetnictví spolku
+
+Peněžní deník podle zákona o účetnictví a vyhlášky č. 325/2015 Sb. (spolek,
+neplátce DPH). Sekce **Administrace → Finance**.
+
+- **Přehled** – zůstatky pokladny a účtu, příjmy/výdaje za rok, co je k
+  vyřízení. **Tržby z pokladny**: hotovostní tržby za uplynulé dny se jedním
+  tlačítkem zapíšou do pokladny. Platby kartou se zapisují až při příchodu
+  peněz na účet (sekce Banka), jak to jednoduché účetnictví vyžaduje.
+- **Nahrát doklady** – vyfoťte účtenky / nahrajte PDF faktur (i víc najednou).
+  S `ANTHROPIC_API_KEY` appka sama přečte částku, datum, dodavatele, VS a
+  navrhne kategorii; vy jen zkontrolujete a potvrdíte. Faktura „zatím
+  nezaplacená“ čeká v seznamu závazků, dokud ji nespárujete s platbou z účtu.
+- **Peněžní deník** – chronologicky všechny příjmy a výdaje v pokladně i na
+  účtu s průběžnými zůstatky, číslování dokladů po řadách (PP/PV pokladna
+  příjem/výdej, BP/BV banka). Upozorní, kdyby pokladna šla do minusu.
+- **Banka** – import pohybů z FIO (`FIO_TOKEN`), zaúčtování jedním klikem
+  (kategorie se navrhne podle dřívějších plateb stejné protistrany), párování
+  s nezaplacenými fakturami (podle částky a VS). Vklad hotovosti na účet /
+  výběr se zapíše jako převod a protidoklad v pokladně vznikne sám.
+- **Výkazy** – přehled o příjmech a výdajích (hlavní / hospodářská činnost,
+  i v tis. Kč pro tiskopis), podklady pro přehled o majetku a závazcích a
+  výsledek hospodářské činnosti jako podklad pro daň. **Export do Excelu**
+  (deník, výkaz, nezaplacené doklady).
+- **Nastavení** – počáteční stavy pokladny a účtu k 1. 1., kategorie a jejich
+  řádky výkazu.
+
+Nastavení na Vercelu (obojí volitelné):
+
+- `FIO_TOKEN` – v internetbankingu FIO: Nastavení → API → přidat token
+  **jen pro čtení**.
+- `ANTHROPIC_API_KEY` – pro automatické čtení dokladů (console.anthropic.com).
+
+Data jsou v tabulkách `fin_records` a `fin_files` (vytvoří se samy), lokálně v
+`data/finance.json`.
+
 ## Struktura
 
 ```

@@ -8,17 +8,19 @@
     "start": "next start",
     "lint": "next lint",
     "seed": "tsx scripts/seed.ts",
-    "test": "node --test --experimental-strip-types lib/team/*.test.ts",
+    "test": "node --test --experimental-strip-types lib/team/*.test.ts lib/finance/*.test.ts",
     "typecheck": "tsc --noEmit",
     "vapid": "node scripts/vapid.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.14.0",
     "@neondatabase/serverless": "^1.1.0",
     "exceljs": "^4.4.0",
     "next": "15.5.20",
     "react": "19.0.0",
     "react-dom": "19.0.0",
-    "web-push": "^3.6.7"
+    "web-push": "^3.6.7",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.0.0",
