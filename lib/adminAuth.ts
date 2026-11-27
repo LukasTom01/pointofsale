@@ -33,7 +33,7 @@ export async function isAdminCookie(value: string | undefined): Promise<boolean>
 export function isProtectedPath(pathname: string, method: string): boolean {
   if (pathname === "/prihlaseni") return false;
   if (pathname === "/admin" || pathname.startsWith("/admin/")) return true;
-  if (pathname.startsWith("/api/export") || pathname.startsWith("/api/team")) return true;
+  if (pathname.startsWith("/api/export") || pathname.startsWith("/api/team") || pathname.startsWith("/api/finance")) return true;
   if (pathname === "/api/orders" && method === "GET") return true;
   if (/^\/api\/(products|categories|staff)(\/|$)/.test(pathname) && method !== "GET") return true;
   return false;
